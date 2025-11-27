@@ -12,11 +12,12 @@ find_package(action_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 set(msg_files
-  "msg/DetectedObject.msg"
+  ""
 )
 
 set(srv_files
   "srv/OrderService.srv"
+  "srv/DetectObject.srv"
 )
 
 set(action_files
