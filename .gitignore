@@ -10,3 +10,7 @@
 build/
 install/
 log/
+
+# api키 무시
+echo "**/.env" >> .gitignore
+echo "*.pt" >> .gitignore  # 큰 모델 파일들도 제외
