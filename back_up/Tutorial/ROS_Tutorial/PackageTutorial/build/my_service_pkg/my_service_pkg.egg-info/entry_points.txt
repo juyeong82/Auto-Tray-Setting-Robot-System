@@ -1,0 +1,4 @@
+[console_scripts]
+add_three_ints_client = my_service_pkg.add_three_ints_client:main
+add_three_ints_server = my_service_pkg.add_three_ints_server:main
+

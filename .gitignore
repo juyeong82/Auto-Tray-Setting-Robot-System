@@ -1,2 +1,25 @@
 /DoosanBootcamp3rd
+/.vscode
 
+# 상위 폴더 빌드 결과 (워크스페이스 루트)
+../build/
+../install/
+../log/
+
+<<<<<<< HEAD
+# api 제외
+.env
+
+=======
+>>>>>>> a06d968692fb1acbf9352f37f47ea69daba1c268
+# 현재 폴더 빌드 결과 (혹시 src에서 빌드했을 경우)
+build/
+install/
+log/
+<<<<<<< HEAD
+=======
+
+# api키 무시
+**/.env
+*.pt
+>>>>>>> a06d968692fb1acbf9352f37f47ea69daba1c268

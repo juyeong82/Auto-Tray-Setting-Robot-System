@@ -1,0 +1,6 @@
+{
+  "package_name": "my_interfaces",
+  "non_idl_tuples": [
+    "/home/rokey/Desktop/Tutorial/ROS_Tutorial/PackageTutorial/src/my_interfaces:srv/AddThreeInts.srv"
+  ]
+}
