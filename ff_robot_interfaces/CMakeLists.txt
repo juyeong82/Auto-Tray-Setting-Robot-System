@@ -9,9 +9,10 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(action_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 set(msg_files
-  "" 
+  "msg/DetectedObject.msg"
 )
 
 set(srv_files
@@ -26,7 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
   ${srv_files}
   ${action_files}
-  DEPENDENCIES builtin_interfaces action_msgs
+  DEPENDENCIES builtin_interfaces action_msgs geometry_msgs
 )
 
 if(BUILD_TESTING)
