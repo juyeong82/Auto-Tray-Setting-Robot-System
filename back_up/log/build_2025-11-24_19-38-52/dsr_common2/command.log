@@ -1,0 +1,6 @@
+Invoking command in '/home/rokey/ros2_ws/build/dsr_common2': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/rokey/ros2_ws/src/DoosanBootcamp3rd/dsr_common2 -DCMAKE_INSTALL_PREFIX=/home/rokey/ros2_ws/install/dsr_common2
+Invoked command in '/home/rokey/ros2_ws/build/dsr_common2' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/rokey/ros2_ws/src/DoosanBootcamp3rd/dsr_common2 -DCMAKE_INSTALL_PREFIX=/home/rokey/ros2_ws/install/dsr_common2
+Invoking command in '/home/rokey/ros2_ws/build/dsr_common2': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/rokey/ros2_ws/build/dsr_common2 -- -j16 -l16
+Invoked command in '/home/rokey/ros2_ws/build/dsr_common2' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/rokey/ros2_ws/build/dsr_common2 -- -j16 -l16
+Invoking command in '/home/rokey/ros2_ws/build/dsr_common2': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/rokey/ros2_ws/build/dsr_common2
+Invoked command in '/home/rokey/ros2_ws/build/dsr_common2' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/rokey/ros2_ws/build/dsr_common2

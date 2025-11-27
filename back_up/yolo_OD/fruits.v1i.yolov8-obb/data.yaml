@@ -1,0 +1,10 @@
+train: train/images
+val: valid/images
+test: test/images
+
+names: 
+  0: apple
+  1: lemon
+  2: mango
+  3: pineapple
+  4: tomato
