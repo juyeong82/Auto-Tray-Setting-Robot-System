@@ -24,7 +24,7 @@ def generate_launch_description():
     # Ubuntu Desktop 환경이라면 gnome-terminal을 사용하여 별도 창을 띄움
     # 키오스크는 CLI 입력이 필요하기 때문입니다.
     kiosk_terminal = ExecuteProcess(
-        cmd=['gnome-terminal', '--', 'ros2', 'run', 'ff_robot', 'kiosk_gem'],
+        cmd=['gnome-terminal', '--', 'ros2', 'run', 'ff_robot', 'kiosk_with_voice'],
         output='screen'
     )
 
