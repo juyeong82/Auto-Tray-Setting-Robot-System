@@ -23,8 +23,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+
 # 1. 환경 설정
-load_dotenv()
+load_dotenv(dotenv_path=ENV_PATH)  # ← 경로 명시
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # 모델 파일 경로 (실행 위치에 파일이 있어야 함)
 WAKEWORD_MODEL_FILE = "hello_rokey_8332_32.tflite"
