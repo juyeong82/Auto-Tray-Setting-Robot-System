@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# v1.5 - 대화 끝나고 대기모드로 복귀
+# v1.6 - 대화 끝나고 대기모드로 복귀 찐막
 import os
 import time
 import numpy as np
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import openwakeword
 from openwakeword.model import Model
 
-# LangChain 관련
+# LangChain 관련막
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -156,47 +156,64 @@ def process_order_data(order_data_str):
 def main():
     pa = pyaudio.PyAudio()
     stream = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1280)
-    detector = WakeupWordDetector(model_file=WAKEWORD_MODEL_FILE, buffer_size=1280)
-    detector.set_stream(stream)
     
     print(f"🤖 로봇이 대기 중입니다. 'Hello 로키'라고 불러주세요.")
 
     while True:
-        if detector.is_wakeup():
-            print("\n✨ 호출어 감지됨! 손님 응대 시작 ✨")
-            session_id = str(time.time())
-            speak("어서오세요 로키버거입니다. 주문하시겠어요?")
+        # [수정 포인트 1] 루프 시작할 때마다 감지기 상태를 깨끗하게 유지
+        # (여기서는 매번 새로 생성하는 것이 가장 확실합니다)
+        detector = WakeupWordDetector(model_file=WAKEWORD_MODEL_FILE, buffer_size=1280)
+        detector.set_stream(stream)
+        
+        # 1. 호출어 감지 대기 (여기서 계속 멈춰 있음)
+        # (주의: detector 내부에서 stream을 읽어오므로, 이전 대화 내용이 stream 버퍼에 남아있다면
+        #  이를 비워주는 작업이 필요할 수 있습니다.)
+        
+        # [수정 포인트 2] 스트림 버퍼 비우기 (대화 중 쌓인 소리 제거)
+        if stream.get_read_available() > 0:
+            _ = stream.read(stream.get_read_available(), exception_on_overflow=False)
             
-            while True:
-                order_text = listen_order()
+        is_detected = False
+        while not is_detected:
+            if detector.is_wakeup():
+                is_detected = True
+                print("\n✨ 호출어 감지됨! 손님 응대 시작 ✨")
+                session_id = str(time.time())
+                speak("어서오세요 로키버거입니다. 주문하시겠어요?")
                 
-                if order_text:
-                    response = chain_with_history.invoke(
-                        {"input": order_text},
-                        config={"configurable": {"session_id": session_id}}
-                    )
+                # [2] 안쪽 루프: 손님과 대화 (주문)
+                while True:
+                    order_text = listen_order()
                     
-                    if "[ORDER:" in response:
-                        parts = response.split("[ORDER:")
-                        robot_ment = parts[0].strip()
-                        order_data = parts[1].replace("]", "").strip()
+                    if order_text:
+                        response = chain_with_history.invoke(
+                            {"input": order_text},
+                            config={"configurable": {"session_id": session_id}}
+                        )
                         
-                        # 1. "계산해주세요" 멘트 출력
-                        speak(robot_ment)
-                        
-                        # 2. 데이터 처리 (ROS2 전송 등)
-                        if process_order_data(order_data):
-                            print("⏳ 결제 대기 중... (10초)")
-                            time.sleep(10) # 10초간 대기 (결제 시간 시뮬레이션)
+                        if "[ORDER:" in response:
+                            parts = response.split("[ORDER:")
+                            robot_ment = parts[0].strip()
+                            order_data = parts[1].replace("]", "").strip()
                             
-                            # 3. [수정됨] 결제 완료 멘트 및 대기 모드 복귀
-                            speak("결제가 완료되었습니다. 주문하신 음식은 곧 준비해 드릴게요.")
-                            print("--- 주문 처리 완료: 대기 모드로 복귀합니다 ---")
-                            break # 안쪽 while문 탈출 -> 바깥쪽 while문의 처음(호출어 대기)으로 돌아감
+                            speak(robot_ment)
+                            
+                            if process_order_data(order_data):
+                                print("⏳ 결제 대기 중... (10초)")
+                                time.sleep(10) 
+                                
+                                speak("결제가 완료되었습니다. 주문하신 음식은 곧 준비해 드릴게요.")
+                                print("--- 주문 처리 완료: 대기 모드로 복귀합니다 ---")
+                                print(f"🤖 로봇이 대기 중입니다. 'Hello 로키'라고 불러주세요.")
+
+                                # [수정 포인트 3] 대화 종료 후 바깥 루프(호출어 대기)로 돌아감
+                                break 
+                        else:
+                            speak(response)
                     else:
-                        speak(response)
-                else:
-                    speak("잘 못 들었습니다. 다시 말씀해 주세요.")
+                        speak("잘 못 들었습니다. 다시 말씀해 주세요.")
+                
+                # 안쪽 while문이 break로 끝나면 여기로 옴 -> 다시 바깥쪽 while문의 처음으로
 
 if __name__ == "__main__":
     try:
