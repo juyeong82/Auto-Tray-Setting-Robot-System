@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # robot_controller_node.py (Threaded Fix + GripperManager + 2-step Pick)
+# MISSION 
+# 음성 매끄럽게!!!
+# 키오스크 주문 리스트 수량 확인!!!
 
 import rclpy
 from rclpy.node import Node
