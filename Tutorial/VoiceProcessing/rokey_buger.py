@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# v1.5 - 대화 끝나고 대기모드로 복귀
 import os
 import time
 import numpy as np
@@ -8,31 +9,29 @@ from gtts import gTTS
 from dotenv import load_dotenv
 import openwakeword
 from openwakeword.model import Model
-from scipy.signal import resample
 
 # LangChain 관련
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import ChatMessageHistory
 
 # 1. 환경 설정
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# 모델 파일 이름 (같은 폴더에 있어야 함)
 WAKEWORD_MODEL_FILE = "hello_rokey_8332_32.tflite"
 
-# --- [내장된 WakeupWord 클래스] ---
+# --- [WakeupWord 클래스] ---
 class WakeupWordDetector:
-    def __init__(self, model_file, buffer_size=1024):
-        # 모델 파일 경로 확인
+    def __init__(self, model_file, buffer_size=1280):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(current_dir, model_file)
         
         if not os.path.exists(model_path):
-            # 없으면 다운로드 시도 (기본 모델인 경우)
             print(f"모델 파일 '{model_file}'을 찾을 수 없습니다. 다운로드를 시도합니다...")
             openwakeword.utils.download_models()
-            model_path = model_file # 다운로드 되면 현재 폴더에 생김
+            model_path = model_file
 
         self.model = Model(wakeword_models=[model_path])
         self.buffer_size = buffer_size
@@ -42,174 +41,163 @@ class WakeupWordDetector:
         self.stream = stream
 
     def is_wakeup(self):
-        if self.stream is None:
-            print("Error: 마이크 스트림이 연결되지 않았습니다.")
-            return False
-            
-        # 마이크에서 소리 데이터 읽기
-        audio_data = np.frombuffer(
-            self.stream.read(self.buffer_size, exception_on_overflow=False),
-            dtype=np.int16
-        )
-
-        # 16000Hz로 리샘플링 (openwakeword 요구사항)
-        # 마이크가 16000Hz라면 리샘플링 없이 써도 됨 (여기서는 안전하게 변환)
-        # audio_16k = resample(audio_data, int(len(audio_data) * 16000 / 44100)) 
-        
-        # 만약 마이크 설정을 16000으로 했다면 그대로 사용
-        audio_16k = audio_data 
-
-        # 모델 예측
-        prediction = self.model.predict(audio_16k)
-        
-        # 감지 확인 (점수가 0.5 이상이면 감지된 것으로 간주)
+        if self.stream is None: return False
+        audio_data = np.frombuffer(self.stream.read(self.buffer_size, exception_on_overflow=False), dtype=np.int16)
+        prediction = self.model.predict(audio_data)
         for mdl in self.model.prediction_buffer.keys():
-            scores = self.model.prediction_buffer[mdl]
-            if scores[-1] > 0.5:
-                return True
+            if self.model.prediction_buffer[mdl][-1] > 0.5: return True
         return False
 
 # --- [LLM 설정] ---
-llm = ChatOpenAI(model="gpt-4o", temperature=0.7, openai_api_key=OPENAI_API_KEY)
-prompt = PromptTemplate(
-    input_variables=["order"],
-    template="""
-    당신은 친절한 로봇 웨이터 '로키'입니다.
-    손님의 주문: "{order}"
-    
-    메뉴
-    - 버거
-        - 불고기버거 : 3000원
-        - 치즈버거 : 3500원
-        - 새우버거 : 3200원
-    - 사이드
-        - 감자튀김 : 1500원
-        - 치킨너겟 : 2000원
-    - 음료
-        - 콜라 : 1800원
-        - 사이다 : 1800원
-    - 세트메뉴 + 3000원 (감자튀김 기본, 치킨너겟으로 변경 시 + 500원)
-    ----------------------------------------------------------------------
-    주문 예시 및 대화 흐름:
-    ex 1) 세트메뉴 구매 시 
-        로봇 : (손님 인식 / 인사)안녕하세요! 로키버거입니다.  메뉴판 보고 주문해주세요.
-        손님 : 불고기버거 세트로 줘  
-        로봇 : (사이드메뉴 확인)사이드메뉴는 감자튀김, 치킨너겟 중 어떤걸로 하시겠습니까?
-        손님 : 기본으로 줘
-        로봇 : (음료 확인)음료는 콜라, 사이다 중 어떤걸로 하시겠습니까?
-        손님 : 콜라로 줘
-        로봇 : 예 알겠습니다. 앞쪽 포스기를 통해 계산해주세요.
-        손님 : (계산 완료)
-        로봇 : 계산이 완료되었습니다. 잠시만 기다려 주세요.
-        로봇 : (준비 완료) 주문하신 불고기버거 세트 나왔습니다.
+llm = ChatOpenAI(model="gpt-4o", temperature=0.3, openai_api_key=OPENAI_API_KEY)
 
-    ex 2) 버거만 구매 시 
-        로봇 : (손님 인식 / 인사)안녕하세요! 로키버거입니다.  메뉴판 보고 주문해주세요.
-        손님 : 치즈버거 줘  
-        로봇 : 버거 단품 맞으신가요?
-        손님 : 버거만 줘
-        로봇 : 예 알겠습니다. 앞쪽 포스기를 통해 계산해주세요.
-        손님 : (계산 완료)
-        로봇 : 계산이 완료되었습니다. 잠시만 기다려 주세요.
-        로봇 : (준비 완료) 주문하신 치즈버거 나왔습니다.
+template = """
+당신은 '로키버거'의 친절한 로봇 점원입니다.
 
-    ex 3) 사이드메뉴 단품만 구매 시 
-        로봇 : (손님 인식 / 인사)안녕하세요! 로키버거입니다.  메뉴판 보고 주문해주세요.
-        손님 : 치킨너겟 줘  
-        로봇 : 사이드메뉴 하나 맞으신가요?
-        손님 : 어
-        로봇 : 예 알겠습니다. 앞쪽 포스기를 통해 계산해주세요.
-        손님 : (계산 완료)
-        로봇 : 계산이 완료되었습니다. 잠시만 기다려 주세요.
-        로봇 : (준비 완료) 주문하신 치킨너겟 나왔습니다.            
+<메뉴 정보>
+- 버거: 불고기버거(buger1), 치즈버거(buger2), 새우버거(buger3)
+- 사이드: 감자튀김(fries), 치킨너겟(nugget)
+- 음료: 콜라(coke), 사이다(soda)
+<메뉴 가격>
+- 버거: 불고기버거(3000), 치즈버거(3500), 새우버거(3200)
+- 사이드: 감자튀김(1500), 치킨너겟(2000)
+- 음료: 콜라(1800), 사이다(1800)
+- 세트메뉴 (+3000): (기본: 감자튀김+콜라)
 
-    위 대화 예시를 참고하여 주문에 대해 친절하게 대답하고, 주문 내용을 확인하는 멘트를 작성해주세요.
-    """
-)
+<대화 규칙>
+1. 손님에게 필요한 정보(버거, 사이드, 음료, 포장여부)를 자연스럽게 하나씩 물어보세요.
+2. 손님이 "계산할게", "이상이야" 등 주문을 마치는 말을 하면 아래 <데이터 추출 규칙>을 따르세요.
+3. 아직 주문 중이거나 식사 장소가 불분명하면 태그를 붙이지 마세요.
+4. 세트메뉴를 시키면 사이드메뉴와 음료 변경 여부를 꼭 확인하세요.
+5. 단품버거 또는 사이드메뉴만 시키면 추가 메뉴 주문 여부를 꼭 확인하세요.
+6. 주문이 끝나면 총 금액을 알려주고 포스기가 앞에 있으니 계산하라고 안내하세요.
+7. 손님에게는 태그를 제외한 친절한 멘트로 대답하세요.
 
-# LCEL(LangChain Expression Language) 문법을 사용한 체인 생성
-# 데이터 흐름: 프롬프트 입력 -> LLM 모델 처리 -> 문자열 파서로 텍스트 추출
+<데이터 추출 규칙>
+- 주문이 최종 확정되었을 때만, 답변 맨 마지막에 [ORDER: 메뉴코드1, 수량1, 메뉴코드2, 수량2, ...] 형식을 추가하세요.
+- 메뉴 이름 대신 위 <메뉴 정보>에 있는 **영어 코드**를 사용하세요.
+- 세트 메뉴인 경우 구성품을 풀어서 각각의 코드로 적으세요.
+- 예시 1: "불고기버거 하나 주세요" -> [ORDER: buger1, 1]
+- 예시 2: "치즈버거 2개랑 콜라 1개" -> [ORDER: buger2, 2, coke, 1]
+- 예시 3: "불고기버거 세트 하나" -> [ORDER: buger1, 1, fries, 1, coke, 1]
+
+<이전 대화 내역>
+{history}
+
+손님: {input}
+로봇: 
+"""
+
+prompt = PromptTemplate(input_variables=["history", "input"], template=template)
 chain = prompt | llm | StrOutputParser()
 
-# ==========================================
-# 2. 기능 함수 정의 (말하기, 듣기)
-# ==========================================
-def speak(text):                    # TTS로 음성 출력
-    print(f"[Robot]: {text}")       # 로봇이 하는말 출력 
-    try:        # gTTS를 이용해 텍스트를 한국어 음성 mp3 파일로 저장
+# 대화 기억 저장소
+memory_store = {}
+
+def get_session_history(session_id: str):
+    if session_id not in memory_store:
+        memory_store[session_id] = ChatMessageHistory()
+    return memory_store[session_id]
+
+chain_with_history = RunnableWithMessageHistory(
+    chain,
+    get_session_history,
+    input_messages_key="input",
+    history_messages_key="history",
+)
+
+# --- [기능 함수] ---
+def speak(text):
+    print(f"🔊 [Robot]: {text}")
+    try:
         tts = gTTS(text=text, lang='ko')
         filename = "voice.mp3"
-        tts.save(filename)                      # 텍스트를 한국어 음성 mp3파일로 저장
-        os.system(f"mpg123 -q {filename}")      # mpg123으로 음성 재생
-        os.remove(filename)                     # 재생 후 파일 삭제
-    except Exception as e:
-        print(f"TTS Error: {e}")                # 에러 발생 시 메시지 출력
+        tts.save(filename)
+        os.system(f"mpg123 -q {filename}")
+        os.remove(filename)
+    except Exception as e: print(f"TTS Error: {e}")
 
-def listen_order():               # 마이크를 통해 사용자의 목소리를 듣고 텍스트로 변환하는 함수 (STT)
-    r = sr.Recognizer()           # 음성 인식기 생성
-    with sr.Microphone() as source:     # 마이크를 음성 소스(입력)로 사용
-        print("🎤 주문중...")
+def listen_order():
+    r = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("🎤 말씀해주세요...")
         try:
-            # listen: 사용자가 말을 할 때까지 기다렸다가 녹음
-            # timeout: 5초 동안 아무 말도 없으면 에러 발생
-            # phrase_time_limit: 한 번 말할 때 최대 5초까지만 듣음
-            audio = r.listen(source, timeout=5, phrase_time_limit=5)
-            # 구글의 무료 STT 서버를 사용하여 음성을 텍스트로 변환 (한국어 설정)
-            text = r.recognize_google(audio, language='ko-KR') 
-            print(f"[User]: {text}")        # 사용자가 한 말을 출력
+            audio = r.listen(source, timeout=10, phrase_time_limit=10)
+            text = r.recognize_google(audio, language='ko-KR')
+            print(f"👤 [User]: {text}")
             return text
-        except sr.WaitTimeoutError:
-            print("음성이 감지되지 않았습니다.") # 5초간 침묵 시            
-            return None
-        except sr.UnknownValueError:
-            print("무슨 말인지 못 알아들었어요.") # 말은 했으나 인식이 안 될 때
-            return None
-        except Exception as e:
-            print(f"STT Error: {e}") # 그 외 에러 (마이크 연결 끊김 등)
-            return None
+        except: return None
 
-# ==========================================
-# 3. 메인 실행 루프 (프로그램의 본체)
-# ==========================================
+# [추가] 리스트 생성 및 전송 함수
+def process_order_data(order_data_str):
+    try:
+        items = [item.strip() for item in order_data_str.split(",")]
+        
+        O_list = [] 
+        N_list = [] 
+        
+        for i in range(0, len(items), 2):
+            menu_code = items[i]
+            quantity = int(items[i+1])
+            O_list.append(menu_code)
+            N_list.append(quantity)
+            
+        print("\n📊 [System] 주문 데이터 생성 완료")
+        print(f"   >>> O_list (주문): {O_list}")
+        print(f"   >>> N_list (수량): {N_list}")
+        
+        # send_to_ros2(O_list, N_list) # ROS2 전송
+        return True
+    except Exception as e:
+        print(f"❌ 데이터 파싱 오류: {e}")
+        return False
+
+# --- [메인 실행] ---
 def main():
-    # [중요] 1. PyAudio를 사용하여 마이크 하드웨어 스트림 열기
-    # 이 스트림은 '호출어 감지(openwakeword)'를 위해 사용됩니다.
     pa = pyaudio.PyAudio()
-    stream = pa.open(
-        format=pyaudio.paInt16,
-        channels=1,
-        rate=16000, # openwakeword는 16kHz를 권장함
-        input=True,
-        frames_per_buffer=1280 # 1280 샘플 = 0.08초 (openwakeword 기본 청크)
-    )
-
-    # 2. 감지기 생성 및 연결 - 호출어 감지기 객체 생성 및 스트림 연결
-    # 이 부분이 없으면 'NoneType has no attribute read' 에러가 발생합니다.
+    stream = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1280)
     detector = WakeupWordDetector(model_file=WAKEWORD_MODEL_FILE, buffer_size=1280)
-    detector.set_stream(stream)     # 열어둔 마이크 스트림을 감지기에 전달
+    detector.set_stream(stream)
     
-    print(f"🤖 로봇이 대기 중입니다. 메뉴를 정하셨으면 'Hello 로키' 라고 불러주세요.")
+    print(f"🤖 로봇이 대기 중입니다. 'Hello 로키'라고 불러주세요.")
 
-    # 무한 루프: 프로그램을 끄기 전까지 계속 반복
     while True:
-        if detector.is_wakeup():        # 1. 호출어("Hello Rokey")가 들리는지 0.08초마다 검사
-            print("\n✨ 호출어 감지됨! ✨")
-            speak("""안녕하세요! 로키버거입니다.
-            메뉴판 보고 주문해주세요.""")     # 2. 호출어가 들리면 대답
+        if detector.is_wakeup():
+            print("\n✨ 호출어 감지됨! 손님 응대 시작 ✨")
+            session_id = str(time.time())
+            speak("어서오세요 로키버거입니다. 주문하시겠어요?")
             
-            # 잠시 마이크 스트림을 멈추거나 비워주는 것이 좋음 (생략 가능)
-            
-            order_text = listen_order()        # 3. 사용자의 주문 듣기 (STT)
-            
-            if order_text:            # 주문이 정상적으로 인식되었다면
-                answer = chain.invoke({"order": order_text})    # 4. LLM(AI)에게 주문 내용을 보내고 적절한 대답 생성
-                speak(answer)         # 5. AI가 만든 대답을 말하기 (TTS)
-            else:                     # 주문을 못 들었을 경우
-                speak("잘 못 들었습니다. 다시 불러주세요.")
-            
-            print("--- 대기 모드로 복귀 ---")
-            # 다시 루프를 돌며 대기
-# 이 파일이 직접 실행될 때만 main() 함수를 호출
+            while True:
+                order_text = listen_order()
+                
+                if order_text:
+                    response = chain_with_history.invoke(
+                        {"input": order_text},
+                        config={"configurable": {"session_id": session_id}}
+                    )
+                    
+                    if "[ORDER:" in response:
+                        parts = response.split("[ORDER:")
+                        robot_ment = parts[0].strip()
+                        order_data = parts[1].replace("]", "").strip()
+                        
+                        # 1. "계산해주세요" 멘트 출력
+                        speak(robot_ment)
+                        
+                        # 2. 데이터 처리 (ROS2 전송 등)
+                        if process_order_data(order_data):
+                            print("⏳ 결제 대기 중... (10초)")
+                            time.sleep(10) # 10초간 대기 (결제 시간 시뮬레이션)
+                            
+                            # 3. [수정됨] 결제 완료 멘트 및 대기 모드 복귀
+                            speak("결제가 완료되었습니다. 주문하신 음식은 곧 준비해 드릴게요.")
+                            print("--- 주문 처리 완료: 대기 모드로 복귀합니다 ---")
+                            break # 안쪽 while문 탈출 -> 바깥쪽 while문의 처음(호출어 대기)으로 돌아감
+                    else:
+                        speak(response)
+                else:
+                    speak("잘 못 들었습니다. 다시 말씀해 주세요.")
+
 if __name__ == "__main__":
     try:
         main()
