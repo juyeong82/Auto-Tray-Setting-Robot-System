@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-# robot_controller_node_gem.py (Strict Verification Version)
+# robot_controller_node_gem.py (Threaded Fix)
 
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-import threading
+import threading  # [핵심] 스레딩 모듈 복구
 import time
 import numpy as np
 import os
-import sys # 종료를 위해 추가
+import sys
 from scipy.spatial.transform import Rotation as R
 
 import DR_init
 from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
 
+# [설정] 로그 즉시 출력
+sys.stdout.reconfigure(line_buffering=True)
+
 # --- [설정] 안전 검증 높이 ---
-SAFE_Z_HEIGHT = 400.0  # (mm)
+SAFE_Z_HEIGHT = 400.0 
 
 # --- 로봇 설정 ---
 ROBOT_ID = "dsr01"
@@ -26,10 +29,9 @@ DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
 # [설정] 관측 자세
-J_LOOK_POS = [-42.94, -54.85, 50.51, -3.11, 130.60, -266.60]
+J_LOOK_POS = [43.97, -5.17, 78.33, -43.15, 126.28, -154.88]
 
-# [설정] 임시 Place 위치 (Loop 연결용)
-# x=300, y=10, z=400, rx=0, ry=180, rz=0
+# [설정] 임시 Place 위치
 TEMP_PLACE_POS = [300.0, 10.0, 400.0, 0.0, 180.0, 0.0]
 
 # --- 전역 변수 ---
@@ -41,35 +43,30 @@ gripper = None
 T_GRIPPER_TO_CAM = None
 
 # ==============================================================================
-# [설정 1] 캘리브레이션 파일 로드 (엄격 모드)
+# [설정 1] 캘리브레이션
 # ==============================================================================
 def load_calibration():
     global T_GRIPPER_TO_CAM
     current_dir = os.path.dirname(os.path.abspath(__file__))
     npy_path = os.path.join(current_dir, "T_gripper2camera.npy")
-    
     if os.path.exists(npy_path):
         T_GRIPPER_TO_CAM = np.load(npy_path)
-        print(f"✅ 캘리브레이션 파일 로드 성공: {npy_path}")
-        print(T_GRIPPER_TO_CAM)
+        print(f"✅ 캘리브레이션 로드: {npy_path}")
     else:
-        print(f"\n❌ [CRITICAL ERROR] 캘리브레이션 파일이 없습니다!")
-        print(f"   경로: {npy_path}")
-        print("   프로그램을 종료합니다.\n")
-        sys.exit(1) # 강제 종료
+        print(f"❌ [CRITICAL] 캘리브레이션 파일 없음!")
+        sys.exit(1)
 
 # ==============================================================================
-# [설정 2] 가상 그리퍼 강제 사용
+# [설정 2] 가상 그리퍼
 # ==============================================================================
-class RG:
-    def __init__(self, *args): 
-        print("✅ [Gripper] 가상(Dummy) 그리퍼 모드로 동작합니다.")
-    def open_gripper(self): 
-        print("   👐 [Virtual] Gripper Open")
-    def close_gripper(self, force=None): 
-        print("   ✊ [Virtual] Gripper Close")
-    def get_status(self):
-        return "Virtual OK"
+try:
+    from ff_robot.onrobot import RG
+    print("✅ Real Gripper Driver Loaded")
+except ImportError:
+    class RG:
+        def __init__(self, *args): pass
+        def open_gripper(self): print("   👐 [Virtual] Open")
+        def close_gripper(self, force=None): print("   ✊ Close")
 
 # ==============================================================================
 # [Math] 좌표 변환
@@ -83,30 +80,33 @@ def get_robot_pose_matrix(posx_list):
     return T
 
 def transform_camera_to_base(cam_xyz):
+    # DSR Node 사용
     from DSR_ROBOT2 import get_current_posx
-    
-    # 1. 현재 로봇 끝단 위치
-    curr_posx = get_current_posx()[0]
-    T_base_gripper = get_robot_pose_matrix(curr_posx)
-    
-    # 2. Eye-in-Hand 변환
-    T_base_cam = T_base_gripper @ T_GRIPPER_TO_CAM
-    
-    # 3. 물체 좌표 (Camera -> Base)
-    # yolo_vision_node가 미터(m) 단위로 준다고 가정 -> 1000 곱해서 mm로 변환
-    p_cam = np.array([cam_xyz[0]*1000, cam_xyz[1]*1000, cam_xyz[2]*1000, 1.0])
-    
-    p_base = T_base_cam @ p_cam
-    return p_base[:3]
+    try:
+        curr_posx = get_current_posx()
+        if curr_posx is None: return None
+        if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
+        
+        T_base_gripper = get_robot_pose_matrix(curr_posx)
+        T_base_cam = T_base_gripper @ T_GRIPPER_TO_CAM
+        
+        p_cam = np.array([cam_xyz[0]*1000, cam_xyz[1]*1000, cam_xyz[2]*1000, 1.0])
+        p_base = T_base_cam @ p_cam
+        return p_base[:3]
+    except Exception as e:
+        print(f"   ❌ 변환 에러: {e}")
+        return None
 
 # ==============================================================================
 # [Motion]
 # ==============================================================================
 def wait_for_motion():
     from DSR_ROBOT2 import check_motion
-    time.sleep(0.2)
+    # [수정] 체크 전 대기 시간 단축
+    # time.sleep(0.2) -> 0.1
+    time.sleep(0.1)
     while check_motion() != 0:
-        time.sleep(0.1) 
+        time.sleep(0.05) # 루프 대기 시간 단축
         if not rclpy.ok(): return False
     return True
 
@@ -114,15 +114,23 @@ def safe_movel(pos, desc="이동"):
     global node_
     from DSR_ROBOT2 import movel, DR_BASE, DR_MV_MOD_ABS
     
-    p_str = f"[{pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}]"
-    node_.get_logger().info(f"   🏃 {desc}... 목표: {p_str}")
+    # 로그도 너무 많이 찍으면 느려지니 필요할 때만
+    # node_.get_logger().info(f"   🏃 {desc}...") 
     
     try:
-        time.sleep(1.0) 
-        # 속도를 낮춰서 안전하게 이동 (Vel=40)
-        movel(pos, vel=[40, 40], acc=[40, 40], ref=DR_BASE, mod=DR_MV_MOD_ABS)
+        # [수정 1] 시작 전 대기: 1.0초 -> 0.05초 (거의 삭제)
+        # time.sleep(1.0) 
+        time.sleep(0.05)
+        
+        # [수정 2] 속도/가속도 증가: 40 -> 100 (원래 속도로 복구)
+        movel(pos, vel=[100.0, 100.0], acc=[100.0, 100.0], ref=DR_BASE, mod=DR_MV_MOD_ABS)
+        
         wait_for_motion()
-        time.sleep(0.5) 
+        
+        # [수정 3] 종료 후 대기: 0.5초 -> 0.05초
+        # time.sleep(0.5) 
+        time.sleep(0.05)
+        
         return True 
     except Exception as e:
         node_.get_logger().error(f"   ❌ {desc} 오류: {e}")
@@ -131,34 +139,30 @@ def safe_movel(pos, desc="이동"):
 def safe_move_and_check(target_pos):
     global gripper, node_
     
-    # 1. Z값을 SAFE_Z_HEIGHT로 고정 (안전장치)
     safe_target = list(target_pos[:3])
     safe_target[2] = SAFE_Z_HEIGHT 
-    
-    # 2. 바닥 보는 자세 [0, 180, 0] 적용
     final_pose = safe_target + [0.0, 180.0, 0.0]
     
-    node_.get_logger().info(f"   🛡️ Pick 검증 이동: Z={SAFE_Z_HEIGHT}mm 고정")
+    node_.get_logger().info(f"   🛡️ 검증 이동: Z={SAFE_Z_HEIGHT}mm")
 
-    # 3. 이동 (Hovering)
-    if not safe_movel(final_pose, "Pick 위치 상공으로 이동"): return False
+    if not safe_movel(final_pose, "Pick 상공 이동"): return False
     
-    # 4. 도착 확인 (그리퍼 깜빡임)
     if gripper: 
-        node_.get_logger().info("   👀 도착! (그리퍼 동작 확인)")
         gripper.open_gripper()
         time.sleep(0.5)
         gripper.close_gripper()
         time.sleep(0.5)
-
     return True
 
 # ==============================================================================
-# [Task]
+# [Task] 로봇 행동 스레드
 # ==============================================================================
 def call_vision_service(target_name):
     global node_, vision_cli
-    if vision_cli is None or not vision_cli.service_is_ready(): return None
+    
+    print(f"   [Debug] 비전 호출: {target_name}")
+    if vision_cli is None or not vision_cli.service_is_ready():
+        return None
     
     req = DetectObject.Request()
     req.target_object_id = target_name
@@ -166,8 +170,11 @@ def call_vision_service(target_name):
     
     start = time.time()
     while not future.done():
-        if time.time() - start > 3.0: return None
-        time.sleep(0.01)
+        if time.time() - start > 10.0: 
+            print("   ⚠️ [Timeout] Vision 응답 없음")
+            return None
+        time.sleep(0.1) # 스레드 양보
+        
     try:
         res = future.result()
         if res.found: return [res.position.x, res.position.y, res.position.z]
@@ -177,94 +184,108 @@ def call_vision_service(target_name):
 def perform_robot_task():
     global node_, manager, gripper
     
+    # DSR 라이브러리 임포트 (스레드 내부)
     try: from DSR_ROBOT2 import movej
     except: return
 
-    # 가상 그리퍼 사용
-    gripper = RG() 
+    try:
+        gripper = RG("rg2", "192.168.1.1", "502") 
+        node_.get_logger().info("✅ Real Gripper Connected")
+    except:
+        gripper = RG()
+
+    node_.get_logger().info(f"🔭 관측 위치 이동... {J_LOOK_POS}")
+    try:
+        movej(J_LOOK_POS, vel=40.0, acc=40.0)
+        wait_for_motion()
+    except Exception as e:
+        node_.get_logger().error(f"❌ 초기 이동 실패: {e}")
     
-    node_.get_logger().info("[Task] 로봇 준비 완료. 주문 대기...")
+    node_.get_logger().info("[Task] 준비 완료. 루프 시작.")
 
     while rclpy.ok():
         try:
             needed_items = manager.get_all_needed_items()
             if not needed_items:
-                time.sleep(1.0)
+                time.sleep(1.0) # 할 일 없으면 대기
                 continue
 
             target_item = needed_items[0]
             node_.get_logger().info(f"========================================")
-            node_.get_logger().info(f"🔎 [Search] '{target_item}' 찾는 중...")
+            node_.get_logger().info(f"🔎 [Search] '{target_item}'")
 
-            # 1. 관측 위치 이동 (매번 이동해서 정확하게 봄)
-            node_.get_logger().info(f"🔭 관측 위치 이동...")
-            movej(J_LOOK_POS, vel=40, acc=40)
-            wait_for_motion()
+            # 1. 관측 위치 복귀
+            try:
+                movej(J_LOOK_POS, vel=40.0, acc=40.0)
+                wait_for_motion()
+            except: pass
 
-            # 2. 비전 좌표
+            # 2. 비전 호출
             cam_xyz = call_vision_service(target_item)
             if cam_xyz is None:
                 node_.get_logger().warn("   ⚠️ 타겟 못 찾음 (Retry)")
                 time.sleep(1.0)
                 continue
 
-            # 3. 좌표 변환
+            # 3. 변환
             base_xyz = transform_camera_to_base(cam_xyz)
-            node_.get_logger().info(f"   📊 [Debug] 변환 좌표: X={base_xyz[0]:.1f}, Y={base_xyz[1]:.1f}")
+            if base_xyz is None:
+                time.sleep(1.0)
+                continue
 
-            # 4. Pick 검증 이동 (Z=400 고정)
+            # 4. 검증 이동
             if safe_move_and_check(base_xyz):
-                node_.get_logger().info("✅ Pick 위치 확인 완료.")
-                
-                # 5. Place (고정 위치로 이동)
-                node_.get_logger().info(f"🚚 Place (Test) 이동 중... {TEMP_PLACE_POS[:3]}")
-                if safe_movel(TEMP_PLACE_POS, "트레이(임시) 이동"):
-                    # 도착 후 그리퍼 열기
-                    gripper.open_gripper()
-                    time.sleep(0.5)
-                    
-                    # [중요] 완료 처리 -> 다음 아이템으로 넘어감
-                    if "SWAP" in "PLACE" or "FINISH" in "PLACE": # 임시 조건
-                        pass
-                    
-                    # 로직상 이 아이템은 처리된 것으로 간주
-                    # manager의 상태를 강제로 업데이트해줘야 함 (SlotManager 로직에 따름)
-                    # 여기서는 간단히 clear_slot 호출 (0번 슬롯이 비워지면 다음 주문 처리)
-                    # 실제로는 placed_total 카운트를 올려야 하지만, 테스트니 슬롯을 비움
+                node_.get_logger().info("✅ 검증 완료.")
+                if safe_movel(TEMP_PLACE_POS, "Place"):
+                    if gripper: gripper.open_gripper()
                     manager.clear_slot(0) 
-                    node_.get_logger().info("🎉 작업 1회 완료. 다음 작업 준비.")
+                    node_.get_logger().info("🎉 작업 완료.")
             else:
-                node_.get_logger().error("❌ Pick 이동 실패")
+                node_.get_logger().error("❌ 이동 실패")
 
-            time.sleep(1.0)
+            # [수정] 작업 사이 대기 시간 단축
+            # time.sleep(1.0) -> 0.1
+            time.sleep(0.1)
 
         except Exception as e:
             node_.get_logger().error(f"Task Error: {e}")
             time.sleep(1.0)
 
 # ==============================================================================
-# [Main]
+# [Main] 서비스 핸들러 및 실행기
 # ==============================================================================
 def handle_order_request(request, response):
     global manager, node_
     node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}")
     success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
+    
     if success:
         manager.add_order_to_slot(f"ORD-{int(time.time())}", request.item_names, request.item_quantities)
-        response.success = True
+        
+        # [수정] response.success = True  <-- 이 줄 삭제!!! (srv 파일에 success 필드가 없음)
+        
+        # 대신 성공 여부는 assigned_order_id가 채워진 것으로 판단하거나, message로 전달
+        response.assigned_order_id = f"ORD-{int(time.time())}" # ID 채우기
         response.message = "접수 완료"
+        
+        node_.get_logger().info("✅ 주문 처리됨 -> Task 스레드가 감지할 것임")
+    else:
+        response.assigned_order_id = ""
+        response.message = msg
+        node_.get_logger().warn(f"🚫 주문 거절: {msg}")
+        
     return response
 
 def main(args=None):
     global node_, dsr_control_node_, manager, vision_cli, T_GRIPPER_TO_CAM
     rclpy.init(args=args)
-    
-    # 캘리브레이션 파일 먼저 체크
     load_calibration()
-    
     manager = SlotManager()
     
+    # 1. 통신 노드 (Spin용)
     node_ = rclpy.create_node("robot_controller_node", namespace=ROBOT_ID)
+    
+    # 2. 로봇 제어 노드 (DSR용 - Spin 안함)
     dsr_control_node_ = rclpy.create_node("dsr_internal_node", namespace=ROBOT_ID)
     DR_init.__dsr__node = dsr_control_node_ 
 
@@ -273,15 +294,23 @@ def main(args=None):
     vision_cli = node_.create_client(DetectObject, '/dsr01/detect_object', callback_group=cb_group)
 
     executor = MultiThreadedExecutor()
-    executor.add_node(node_)
+    executor.add_node(node_) # 통신 노드만 등록
 
+    # [핵심 수정] 별도 스레드에서 로봇 로직 실행
     t_robot = threading.Thread(target=perform_robot_task, daemon=True)
     t_robot.start()
     
-    try: executor.spin()
-    except: pass
+    try:
+        # 메인 스레드는 ROS 통신에 집중 (주문 받기, 비전 요청/응답 처리)
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
     finally:
-        if rclpy.ok(): rclpy.shutdown()
+        if rclpy.ok():
+            executor.shutdown()
+            node_.destroy_node()
+            dsr_control_node_.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

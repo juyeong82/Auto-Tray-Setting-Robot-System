@@ -12,12 +12,15 @@ class SlotManager:
     """
 
     def __init__(self):
-        # 1. 초기 재고 설정 (테스트를 위해 넉넉히 설정)
+        # [수정] YOLO 학습 이름과 동일하게 변경해야 함
         self.inventory = {
-            "burger_cheese": 100,
-            "burger_bulgogi": 100,
-            "fries": 100,
-            "coke": 100
+            "burger1": 100,  # burger_cheese -> burger1
+            "burger2": 100,
+            "burger3": 100,
+            "fries": 100,    # french_fries -> fries (학습명 기준)
+            "nugget": 100,
+            "coke": 100,
+            "cider": 100
         }
 
         # 2. 트레이 설정
