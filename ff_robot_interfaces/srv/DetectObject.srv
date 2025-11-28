@@ -3,7 +3,6 @@
 # =========== Request (Controller-> Vision node) ===========
 string target_object_id  #찾고자 하는 물체 이름(예: "burger_cheese", "tray_marker_0")
 
-
 ---
 # =========== Response (Vision node -> Controller) ===========
 bool found  #물체 발견 여부
