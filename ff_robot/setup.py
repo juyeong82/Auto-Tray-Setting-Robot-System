@@ -31,7 +31,7 @@ setup(
             'kiosk_gem = ff_robot.kiosk_gem:main',
             'kiosk_with_voice = ff_robot.kiosk_with_voice:main',
             'dummy_vision_node = ff_robot.dummy_vision_node:main',
-            'kvu = ff_robot.kvu:main'
+            'kvu = ff_robot.kvu:main',
             'dummy_vision_node = ff_robot.dummy_vision_node:main',
             'yolo_vision_node = ff_robot.yolo_vision_node:main',
         ],
