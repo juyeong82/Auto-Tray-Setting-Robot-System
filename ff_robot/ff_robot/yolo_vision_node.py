@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import time
+import os
 
 # [핵심] QoS 설정 모듈
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -26,7 +27,10 @@ class YoloVisionNode(Node):
         self.get_logger().info("🚀 YOLO Vision Node (QoS Matched)")
         self.get_logger().info("=========================================")
         
-        self.model_path = "/home/rokey/ros2_ws/src/ff_robot/ff_robot/models/best.pt"
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.model_path = os.path.join(current_dir, "models", "best.pt")
+        
+        # self.model_path = "/home/juyeong/ros2_ws/src/ff_robot/ff_robot/models/best.pt"
         self.bridge = CvBridge()
         self.latest_color_img = None
         self.latest_depth_img = None
@@ -168,7 +172,7 @@ class YoloVisionNode(Node):
         response.position = Point(x=cam_point[0], y=cam_point[1], z=cam_point[2])
         response.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0) 
         
-        self.get_logger().info(f"   ✅ 좌표 반환: X={cam_point[0]:.3f}, Y={cam_point[1]:.3f}, Z={cam_point[2]:.3f}")
+        self.get_logger().info(f"   ✅ 좌표 반환: X={cam_point[0]:.3f}, Y={cam_point[1]:.3f}, Z={cam_point[2]+0.170:.3f}")
         return response
 
 def main(args=None):
