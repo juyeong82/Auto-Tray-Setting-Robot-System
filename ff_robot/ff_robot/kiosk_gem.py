@@ -43,9 +43,10 @@ def get_user_input():
     print("\n" + "="*40)
     print("      🍔 HAMBURGER KIOSK 🍟      ")
     print("="*40)
-    print("메뉴: burger_cheese, burger_bulgogi, fries, coke")
+    # [수정] YOLO 학습 라벨과 일치하는 메뉴판으로 변경
+    print("메뉴: burger1, burger2, burger3, fries, nugget, coke, cider")
     print("입력 형식: 메뉴1 수량1, 메뉴2 수량2 (종료: q)")
-    print("예시: burger_cheese 2, coke 1")
+    print("예시: burger1 2, coke 1") # [수정] 예시도 변경
     
     user_in = input("\n주문 입력 > ").strip()
     if user_in.lower() == 'q':
@@ -91,12 +92,11 @@ def main(args=None):
                 print(f"\n✅ [주문 성공]")
                 print(f"   - 주문번호: {response.assigned_order_id}")
                 print(f"   - 안내메시지: {response.message}")
-                print(f"   - 예상시간: {response.estimated_time}초")
             else:
                 print(f"\n🚫 [주문 실패]")
                 print(f"   - 사유: {response.message}")
             
-            # 재고 현황 표시 (공통)
+            # 재고 현황 표시
             print("\n   [현재 재고 현황]")
             for i, item_id in enumerate(response.all_item_ids):
                 print(f"   - {item_id}: {response.all_item_counts[i]}")
