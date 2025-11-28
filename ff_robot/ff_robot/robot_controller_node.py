@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# robot_controller_node.py (Threaded Fix + GripperManager + 2-step Pick)
+# robot_controller_node_gem.py (Threaded Fix)
 
 import rclpy
 from rclpy.node import Node
@@ -15,7 +15,6 @@ from scipy.spatial.transform import Rotation as R
 import DR_init
 from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
-from ff_robot.gripper import GripperManager   # ✅ 추가: 메뉴별 그리퍼 제어
 
 # [설정] 로그 즉시 출력
 sys.stdout.reconfigure(line_buffering=True)
@@ -41,7 +40,6 @@ dsr_control_node_ = None
 manager = None
 vision_cli = None 
 gripper = None
-gripper_manager = None   # ✅ 추가
 T_GRIPPER_TO_CAM = None
 
 # ==============================================================================
@@ -139,41 +137,26 @@ def safe_movel(pos, desc="이동"):
         return False
 
 def safe_move_and_check(target_pos):
-    """
-    target_pos: transform_camera_to_base() 결과 [x, y, z] (mm 단위)
-
-    1) calibration 보정 오프셋 적용
-       - z += 170
-       - y -= 20
-    2) 보정된 픽 포인트 기준:
-       - (x, y, z+50) 상공으로 이동
-       - (x, y, z)로 50mm 직하 이동
-    """
-    global node_
+    global gripper, node_
     
-    # --- 기존 오프셋 유지 ---
     safe_target = list(target_pos[:3])
-    safe_target[2] += 170.0   # z 보정
-    safe_target[1] -= 20.0    # y 보정
+    safe_target[2] += 170
+    safe_target[1] -= 20
+    final_pose = safe_target + [0.0, 180.0, 0.0]
     
-    x, y, z = safe_target
+    node_.get_logger().info(f"   🛡️ 검증 이동: Z={SAFE_Z_HEIGHT}mm")
 
-    # 1. 타겟 상공 (z + 50mm)
-    approach_pose = [float(x), float(y), float(z + 50.0), 0.0, 180.0, 0.0]
-    node_.get_logger().info(f"   🛡️ 상공 접근: X={x:.1f}, Y={y:.1f}, Z={z+50.0:.1f}mm")
-    if not safe_movel(approach_pose, "Pick 상공 이동"):
-        return False
-
-    # 2. 타겟 위치까지 직하 이동 (보정된 z)
-    pick_pose = [float(x), float(y), float(z), 0.0, 180.0, 0.0]
-    node_.get_logger().info(f"   🎯 픽 위치 이동: X={x:.1f}, Y={y:.1f}, Z={z:.1f}mm")
-    if not safe_movel(pick_pose, "Pick 위치 이동"):
-        return False
-
+    if not safe_movel(final_pose, "Pick 상공 이동"): return False
+    
+    if gripper: 
+        gripper.open_gripper()
+        time.sleep(0.5)
+        gripper.close_gripper()
+        time.sleep(0.5)
     return True
 
 # ==============================================================================
-# [Vision Service]
+# [Task] 로봇 행동 스레드
 # ==============================================================================
 def call_vision_service(target_name):
     global node_, vision_cli
@@ -199,33 +182,18 @@ def call_vision_service(target_name):
     except: pass
     return None
 
-# ==============================================================================
-# [Task] 로봇 행동 스레드
-# ==============================================================================
 def perform_robot_task():
-    global node_, manager, gripper, gripper_manager
+    global node_, manager, gripper
     
     # DSR 라이브러리 임포트 (스레드 내부)
-    try: 
-        from DSR_ROBOT2 import movej
-    except: 
-        return
+    try: from DSR_ROBOT2 import movej
+    except: return
 
-    # --- 그리퍼 초기화 ---
     try:
         gripper = RG("rg2", "192.168.1.1", "502") 
         node_.get_logger().info("✅ Real Gripper Connected")
-    except Exception as e:
-        node_.get_logger().warn(f"⚠️ Real Gripper 연결 실패, Virtual Gripper 사용: {e}")
+    except:
         gripper = RG()
-
-    # --- GripperManager 생성 ---
-    try:
-        gripper_manager = GripperManager(gripper)
-        node_.get_logger().info("✅ GripperManager 초기화 완료")
-    except Exception as e:
-        gripper_manager = None
-        node_.get_logger().error(f"❌ GripperManager 초기화 실패: {e}")
 
     node_.get_logger().info(f"🔭 관측 위치 이동... {J_LOOK_POS}")
     try:
@@ -251,14 +219,7 @@ def perform_robot_task():
             try:
                 movej(J_LOOK_POS, vel=40.0, acc=40.0)
                 wait_for_motion()
-            except: 
-                pass
-
-            # 1-1. 관측 자세에서 메뉴에 맞게 그리퍼 오픈
-            if gripper_manager:
-                gripper_manager.prepare_grip(target_item)
-            else:
-                node_.get_logger().warn("   ⚠️ GripperManager 없음 -> 그리퍼 준비 생략")
+            except: pass
 
             # 2. 비전 호출
             cam_xyz = call_vision_service(target_item)
@@ -273,24 +234,11 @@ def perform_robot_task():
                 time.sleep(1.0)
                 continue
 
-            # 4. 상공 → 픽 위치까지 이동
+            # 4. 검증 이동
             if safe_move_and_check(base_xyz):
-                node_.get_logger().info("✅ 위치 접근 완료. 집기 시도.")
-
-                # 4-1. 현재 위치에서 그리퍼 클로즈
-                if gripper_manager:
-                    gripper_manager.execute_grip(target_item)
-                else:
-                    node_.get_logger().warn("   ⚠️ GripperManager 없음 -> 집기 생략")
-                time.sleep(0.5)
-
-                # 4-2. Place 위치로 이동 후 release
+                node_.get_logger().info("✅ 검증 완료.")
                 if safe_movel(TEMP_PLACE_POS, "Place"):
-                    if gripper_manager:
-                        gripper_manager.release(target_item)
-                    else:
-                        node_.get_logger().warn("   ⚠️ GripperManager 없음 -> 릴리즈 생략")
-
+                    if gripper: gripper.open_gripper()
                     manager.clear_slot(0) 
                     node_.get_logger().info("🎉 작업 완료.")
             else:
