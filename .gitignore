@@ -15,4 +15,5 @@ install/
 log/
 
 # cache 삭제
-.pyc
+__pycache__/
+*.pyc
