@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# kiosk_node.py
+# kiosk_gem.py
 #
 # 주문 키오스크 시뮬레이터
 # - 사용자로부터 메뉴 입력 받음 (CLI)
