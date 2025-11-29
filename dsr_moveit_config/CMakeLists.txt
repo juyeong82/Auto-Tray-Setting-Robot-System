@@ -3,6 +3,10 @@ project(dsr_moveit_config)
 
 find_package(ament_cmake REQUIRED)
 
+install(DIRECTORY worlds
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch")
