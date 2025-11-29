@@ -465,8 +465,7 @@
 
   <joint name="camera_mount_joint" type="fixed">
     <!-- <origin xyz="0.05 0 0.03" rpy="0 0 0"/> -->
-    <!-- <origin xyz="-0.05 0 -0.03" rpy="3.14159 0 3.14159"/> -->
-    <origin xyz="-0.05 0 -0.03" rpy="0 -1.5708 0"/>
+    <origin xyz="-0.05 0 -0.03" rpy="3.14159 0 3.14159"/>
     <parent link="link_6"/>
     <child link="camera_base_link"/>
   </joint>
@@ -491,13 +490,6 @@
       <inertia ixx="0.003881243" ixy="0.0" ixz="0.0" iyy="0.000498940" iyz="0.0" izz="0.003879257"/>
     </inertial>
   </link>
-  <!-- 광학용 가짜 링크(Optical Frame) -->
-  <link name="camera_depth_optical_frame"/>
-
-  <joint name="camera_depth_optical_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/> <parent link="camera_base_link"/>
-    <child link="camera_depth_optical_frame"/>
-  </joint>
 
   <gazebo reference="camera_base_link">
     <sensor name="d435i" type="depth">
@@ -523,8 +515,7 @@
           <remapping>d435i/points:=camera/depth/color/points</remapping>
         </ros>
         <camera_name>d435i</camera_name>
-        <!-- <frame_name>camera_base_link</frame_name> -->
-        <frame_name>camera_depth_optical_frame</frame_name>
+        <frame_name>camera_base_link</frame_name>
         <min_depth>0.1</min_depth>
         <max_depth>10.0</max_depth>
       </plugin>
@@ -574,14 +565,6 @@
       <state_interface name="position">
         <param name="initial_value">0.0</param>
       </state_interface>
-      <state_interface name="velocity"/>
-    </joint>
-
-    <joint name="rg2_finger_joint2">
-      <param name="mimic">rg2_finger_joint1</param>
-      <param name="multiplier">1</param>
-      <command_interface name="position"/>
-      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
 
