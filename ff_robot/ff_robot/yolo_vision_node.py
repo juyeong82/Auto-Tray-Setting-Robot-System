@@ -36,9 +36,24 @@ class YoloVisionNode(Node):
         self.latest_depth_img = None
         self.camera_intrinsics = None 
         
+        # try:
+        #     self.model = YOLO(self.model_path) 
+        #     self.get_logger().info("✅ YOLO 모델 로드 완료")
+        # except Exception as e:
+        #     self.get_logger().error(f"모델 로드 실패: {e}")
+            
         try:
-            self.model = YOLO(self.model_path) 
-            self.get_logger().info("✅ YOLO 모델 로드 완료")
+            self.model = YOLO(self.model_path)
+            
+            # GPU 사용 확인
+            device = self.model.device
+            self.get_logger().info(f"✅ YOLO 모델 로드 완료 (Device: {device})")
+            
+            # ⭐ GPU 워밍업 (첫 추론 시 지연 방지)
+            dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+            _ = self.model(dummy_img, verbose=False)
+            self.get_logger().info("✅ GPU 워밍업 완료")
+            
         except Exception as e:
             self.get_logger().error(f"모델 로드 실패: {e}")
 
@@ -98,20 +113,40 @@ class YoloVisionNode(Node):
         target_name = request.target_object_id
         self.get_logger().info(f"🔎 YOLO 요청 수신: '{target_name}'")
 
-        # 대기 로직 (이미지 들어올 때까지)
-        wait_start = time.time()
-        while self.latest_color_img is None or self.latest_depth_img is None:
-            if time.time() - wait_start > 5.0: 
-                self.get_logger().error(f"❌ [Timeout] 이미지 수신 실패 (5초)")
-                response.found = False
-                return response
-            time.sleep(0.05)
-        
+        # # 대기 로직 (이미지 들어올 때까지)
+        # wait_start = time.time()
+        # while self.latest_color_img is None or self.latest_depth_img is None:
+        #     if time.time() - wait_start > 5.0: 
+        #         self.get_logger().error(f"❌ [Timeout] 이미지 수신 실패 (5초)")
+        #         response.found = False
+        #         return response
+        #     time.sleep(0.05)
+            
+        inference_start = time.time()  # ⭐ 전체 처리 시간 측정 시작
+
+        # 이미지 수신 확인 (대기 없음)
+        if self.latest_color_img is None or self.latest_depth_img is None:
+            # 최대 1초만 대기 (카메라 30fps이면 33ms면 충분)
+            wait_start = time.time()
+            while self.latest_color_img is None or self.latest_depth_img is None:
+                if time.time() - wait_start > 1.0:  # 5초 → 1초로 단축
+                    self.get_logger().error(f"❌ [Timeout] 이미지 수신 실패")
+                    response.found = False
+                    return response
+                time.sleep(0.01)  # ⭐ 50ms → 10ms로 단축
+
         # YOLO 추론
+        # results = self.model(self.latest_color_img, verbose=False)
+        
+        # ⭐ YOLO 추론 (시간 측정)
+        yolo_start = time.time()
         results = self.model(self.latest_color_img, verbose=False)
+        yolo_time = (time.time() - yolo_start) * 1000  # ms 단위
+        
         found_target = False
         center_x, center_y = 0, 0
         box_w, box_h = 20, 20
+        rotation_rad = 0.0  # OBB 회전각 (라디안)
 
         for r in results:
             if r.obb is not None:
@@ -122,7 +157,9 @@ class YoloVisionNode(Node):
                         c_x, c_y, w, h, rot = box.xywhr[0].cpu().numpy()
                         center_x, center_y = int(c_x), int(c_y)
                         box_w, box_h = int(w), int(h)
+                        rotation_rad = float(rot)  # OBB 회전각 저장
                         found_target = True
+                        self.get_logger().info(f"OBB 회전각: {np.degrees(rotation_rad):.1f}°")
                         break
             if not found_target and r.boxes is not None:
                 for box in r.boxes:
@@ -134,6 +171,7 @@ class YoloVisionNode(Node):
                         center_y = int((y1+y2)/2)
                         box_w, box_h = abs(x2-x1), abs(y2-y1)
                         found_target = True
+                        # self.get_logger().info(f"OBB 회전각: {np.degrees(rotation_rad):.1f}°")
                         break
 
         if not found_target:
@@ -161,6 +199,27 @@ class YoloVisionNode(Node):
             depth_mm = float(np.median(valid_depths))
             self.get_logger().info(f"   📏 거리: {depth_mm:.1f} mm")
 
+        # =================================================================
+        # 📸 ### [디버깅 추가] 화면에 점 찍고 확인하기 (엔터 쳐야 넘어감)
+        # =================================================================
+        import cv2
+        debug_img = self.latest_color_img.copy() # 원본 보존을 위해 복사
+        
+        # 1. 빨간 점 (중심)
+        cv2.circle(debug_img, (center_x, center_y), 5, (0, 0, 255), -1)
+        
+        # 2. 텍스트 표시 (이름 + 거리)
+        text = f"{target_name} ({depth_mm:.0f}mm)"
+        cv2.putText(debug_img, text, (center_x + 10, center_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # 3. 화면 띄우고 대기
+        print(f"\n📸 [Vision Check] '{target_name}' 확인! (화면 클릭 후 아무 키나 누르면 이동)")
+        cv2.imshow("Vision Debug (Press Any Key)", debug_img)
+        cv2.waitKey(0) # 키 입력 무한 대기
+        cv2.destroyAllWindows()
+        # =================================================================
+
         # 3D 변환
         cam_point = self.pixel_to_3d_cam(center_x, center_y, depth_mm)
         if cam_point is None:
@@ -170,9 +229,8 @@ class YoloVisionNode(Node):
 
         response.found = True
         response.position = Point(x=cam_point[0], y=cam_point[1], z=cam_point[2])
-        response.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0) 
+        # response.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0) 
         
-        self.get_logger().info(f"   ✅ 좌표 반환: X={cam_point[0]:.3f}, Y={cam_point[1]:.3f}, Z={cam_point[2]+0.170:.3f}")
         return response
 
 def main(args=None):
