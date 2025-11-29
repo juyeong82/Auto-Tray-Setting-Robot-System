@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dsr_m0609_complete">
+  
+  <xacro:arg name="gripper" default="true"/>
+  <xacro:arg name="camera" default="true"/>
+  <xacro:arg name="namespace" default=""/>
+
+  <!-- Material을 먼저 include (한 번만) -->
+  <xacro:include filename="$(find dsr_description2)/config/macro.materials.xacro"/>
+
+  <!-- 로봇 모델 include -->
+  <xacro:include filename="$(find dsr_description2)/xacro/m0609.urdf.xacro"/>
+  <xacro:m0609 namespace="$(arg namespace)"/>
+  
+  <xacro:if value="$(arg gripper)">
+    <xacro:include filename="$(find robot_description)/urdf/onrobot_gr2.urdf.xacro"/>
+    <xacro:onrobot_gr2 prefix="" parent="link6">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:onrobot_gr2>
+  </xacro:if>
+  
+  <xacro:if value="$(arg camera)">
+    <xacro:include filename="$(find robot_description)/urdf/d435i.urdf.xacro"/>
+    <xacro:d435i_camera prefix="" parent="link6">
+      <origin xyz="0.05 0 0.03" rpy="0 0 0"/>
+    </xacro:d435i_camera>
+  </xacro:if>
+
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <joint name="joint1">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint2">
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+    </joint>
+    <joint name="joint3">
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+    </joint>
+    <joint name="joint4">
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+    </joint>
+    <joint name="joint5">
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+    </joint>
+    <joint name="joint6">
+      <command_interface name="position"/>
+      <state_interface name="position"/><state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+      <parameters>$(find robot_description)/config/ros2_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+</robot>
+

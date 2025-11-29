@@ -1,0 +1,49 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    # 1. 팔 컨트롤러
+    manipulator_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # 2. 상태 브로드캐스터
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # 3. [추가] 그리퍼 컨트롤러
+    gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+# -----------------------------------------------------------------------------
+# 팔 컨트롤러 설정
+# -----------------------------------------------------------------------------
+manipulator_controller:
+  ros__parameters:
+    joints:
+      # [중요] URDF와 이름이 똑같아야 합니다! (언더바 포함)
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+# -----------------------------------------------------------------------------
+# [추가] 그리퍼 컨트롤러 설정
+# -----------------------------------------------------------------------------
+gripper_controller:
+  ros__parameters:
+    joints:
+      - rg2_finger_joint1
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    gains:
+      rg2_finger_joint1: {p: 100.0, d: 10.0, i: 0.0}
