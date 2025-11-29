@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import yaml
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
@@ -62,7 +63,6 @@ def generate_launch_description():
     )
 
     # 7. 컨트롤러 로드 (Spawner)
-    # Gazebo 플러그인과 충돌하지 않도록 'spawner'를 사용합니다.
     load_joint_state_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
@@ -84,13 +84,25 @@ def generate_launch_description():
         output='screen'
     )
     
-    # 8. MoveIt 설정 (OMPL 파이프라인)
+    # 8. ✅ MoveIt 설정 파일들을 실제로 로드
+    kinematics_file = os.path.join(moveit_config_pkg, 'config', 'kinematics.yaml')
+    joint_limits_file = os.path.join(moveit_config_pkg, 'config', 'joint_limits.yaml')
+    moveit_controllers_file = os.path.join(moveit_config_pkg, 'config', 'moveit_controllers.yaml')
+    
+    # YAML 파일을 딕셔너리로 로드
+    with open(kinematics_file, 'r') as f:
+        kinematics_yaml = yaml.safe_load(f)
+    with open(joint_limits_file, 'r') as f:
+        joint_limits_yaml = yaml.safe_load(f)
+    with open(moveit_controllers_file, 'r') as f:
+        moveit_controllers_yaml = yaml.safe_load(f)
+    
+    # 9. MoveIt 설정 (OMPL 파이프라인)
     moveit_config = {
         'robot_description': robot_description_content,
         'robot_description_semantic': open(srdf_file).read(),
-        'robot_description_kinematics': PathJoinSubstitution([
-            moveit_config_pkg, 'config', 'kinematics.yaml'
-        ]),
+        'robot_description_kinematics': kinematics_yaml,      # ✅ 실제 내용 전달
+        'robot_description_planning': joint_limits_yaml,       # ✅ joint limits 추가
         'planning_pipelines': ['ompl'],
         'ompl': {
             'planning_plugin': 'ompl_interface/OMPLPlanner',
@@ -99,7 +111,10 @@ def generate_launch_description():
         },
     }
     
-    # Move Group 노드 (경로 계획)
+    # MoveIt controller manager 설정 추가
+    moveit_config.update(moveit_controllers_yaml)
+    
+    # 10. Move Group 노드 (경로 계획)
     move_group_node = Node(
         package='moveit_ros_move_group',
         executable='move_group',
@@ -114,7 +129,7 @@ def generate_launch_description():
         ]
     )
     
-    # RViz 실행 (시각화)
+    # 11. RViz 실행 (시각화)
     rviz_config = os.path.join(moveit_config_pkg, 'config', 'moveit.rviz')
     rviz_node = Node(
         package='rviz2',
