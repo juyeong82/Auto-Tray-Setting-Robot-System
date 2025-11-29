@@ -3,30 +3,27 @@
 import os
 import yaml
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, RegisterEventHandler, TimerAction
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Command, FindExecutable
+from launch.substitutions import PathJoinSubstitution, Command, FindExecutable
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # 1. 패키지 경로 설정
+    # 1. 패키지 경로
     moveit_config_pkg = get_package_share_directory('dsr_moveit_config')
     robot_description_pkg = get_package_share_directory('robot_description')
     
-    # 2. URDF 파일 경로 (확장자는 .urdf지만 내용 해석을 위해 xacro 필수)
+    # 2. URDF
     urdf_file_path = os.path.join(robot_description_pkg, 'urdf', 'dsr_combined_fixed3.urdf')
-    
-    # 3. Xacro 명령어로 URDF 생성 (성공했던 핵심 설정)
     robot_description_content = Command([
         FindExecutable(name='xacro'), ' ', urdf_file_path
     ])
-    
     robot_description = {'robot_description': robot_description_content}
 
-    # SRDF 파일 경로
+    # 3. SRDF
     srdf_file = os.path.join(moveit_config_pkg, 'config', 'dsr_m0609_complete.srdf')
     
     # 4. Robot State Publisher
@@ -38,7 +35,7 @@ def generate_launch_description():
         parameters=[robot_description]
     )
     
-    # 5. Gazebo 실행
+    # 5. Gazebo
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -47,10 +44,10 @@ def generate_launch_description():
                 'gazebo.launch.py'
             ])
         ]),
-        launch_arguments={'verbose': 'true'}.items()
+        launch_arguments={'verbose': 'false'}.items()
     )
     
-    # 6. 로봇 스폰
+    # 6. Spawn Robot
     spawn_entity = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',
@@ -62,7 +59,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 7. 컨트롤러 로드 (Spawner)
+    # 7. Controllers
     load_joint_state_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
@@ -84,12 +81,11 @@ def generate_launch_description():
         output='screen'
     )
     
-    # 8. ✅ MoveIt 설정 파일들을 실제로 로드
+    # 8. ✅ MoveIt 설정 파일 로드
     kinematics_file = os.path.join(moveit_config_pkg, 'config', 'kinematics.yaml')
     joint_limits_file = os.path.join(moveit_config_pkg, 'config', 'joint_limits.yaml')
     moveit_controllers_file = os.path.join(moveit_config_pkg, 'config', 'moveit_controllers.yaml')
     
-    # YAML 파일을 딕셔너리로 로드
     with open(kinematics_file, 'r') as f:
         kinematics_yaml = yaml.safe_load(f)
     with open(joint_limits_file, 'r') as f:
@@ -97,12 +93,22 @@ def generate_launch_description():
     with open(moveit_controllers_file, 'r') as f:
         moveit_controllers_yaml = yaml.safe_load(f)
     
-    # 9. MoveIt 설정 (OMPL 파이프라인)
+    # 9. ⭐ MoveIt 설정 (Trajectory Execution 활성화)
     moveit_config = {
         'robot_description': robot_description_content,
         'robot_description_semantic': open(srdf_file).read(),
-        'robot_description_kinematics': kinematics_yaml,      # ✅ 실제 내용 전달
-        'robot_description_planning': joint_limits_yaml,       # ✅ joint limits 추가
+        'robot_description_kinematics': kinematics_yaml,
+        'robot_description_planning': joint_limits_yaml,
+        
+        # ⭐ Trajectory Execution 설정
+        'moveit_manage_controllers': True,
+        'trajectory_execution': {
+            'allowed_execution_duration_scaling': 1.2,
+            'allowed_goal_duration_margin': 0.5,
+            'allowed_start_tolerance': 0.01,
+        },
+        
+        # Planning pipeline
         'planning_pipelines': ['ompl'],
         'ompl': {
             'planning_plugin': 'ompl_interface/OMPLPlanner',
@@ -111,25 +117,18 @@ def generate_launch_description():
         },
     }
     
-    # MoveIt controller manager 설정 추가
+    # MoveIt controller manager 설정
     moveit_config.update(moveit_controllers_yaml)
     
-    # 10. Move Group 노드 (경로 계획)
+    # 10. Move Group
     move_group_node = Node(
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
-        parameters=[
-            moveit_config,
-            {
-                'trajectory_execution.allowed_execution_duration_scaling': 1.2,
-                'trajectory_execution.allowed_goal_duration_margin': 0.5,
-                'trajectory_execution.allowed_start_tolerance': 0.01,
-            }
-        ]
+        parameters=[moveit_config]
     )
     
-    # 11. RViz 실행 (시각화)
+    # 11. RViz
     rviz_config = os.path.join(moveit_config_pkg, 'config', 'moveit.rviz')
     rviz_node = Node(
         package='rviz2',
@@ -144,7 +143,8 @@ def generate_launch_description():
         robot_state_publisher,
         gazebo,
         spawn_entity,
-        # 로봇 스폰 후 컨트롤러 실행
+        
+        # 컨트롤러는 spawn 후 실행
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=spawn_entity,
@@ -155,7 +155,12 @@ def generate_launch_description():
                 ]
             )
         ),
-        # 컨트롤러 로드와 동시에 MoveIt 실행
-        move_group_node,
+        
+        # ⭐ MoveGroup은 컨트롤러 로드 후 약간 지연
+        TimerAction(
+            period=5.0,  # 5초 후 실행
+            actions=[move_group_node]
+        ),
+        
         rviz_node,
     ])
