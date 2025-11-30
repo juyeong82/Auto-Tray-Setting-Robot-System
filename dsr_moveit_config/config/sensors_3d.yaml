@@ -1,11 +1,23 @@
+# sensors:
+#   - default_sensor
+# default_sensor:
+#   filtered_cloud_topic: /camera/filtered_points
+#   max_range: 3.0
+#   max_update_rate: ""
+#   padding_offset: 0.01
+#   padding_scale: 1.0
+#   point_cloud_topic: /camera/depth/color/points
+#   point_subsample: 1
+#   sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+
 sensors:
   - default_sensor
 default_sensor:
-  filtered_cloud_topic: /camera/filtered_points
-  max_range: 3.0
-  max_update_rate: ""
-  padding_offset: 0.01
-  padding_scale: 1.0
-  point_cloud_topic: /camera/depth/color/points
-  point_subsample: 1
   sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /dsr01/camera/depth/color/points  # ✅ [수정됨] 실제 토픽명과 일치시킴
+  max_range: 2.5           # 인식할 최대 거리 (너무 멀면 노이즈 심함)
+  point_subsample: 1       # 1이면 모든 점 사용 (성능 위해 2~4로 높여도 됨)
+  padding_offset: 0.05     # 물체보다 약간 더 크게 인식 (충돌 방지 안전 마진)
+  padding_scale: 1.0
+  max_update_rate: 1.0     # 1초에 한 번만 맵 업데이트 (부하 감소)
+  filtered_cloud_topic: filtered_cloud

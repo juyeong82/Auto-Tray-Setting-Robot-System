@@ -122,7 +122,7 @@ class IntegratedRobotTest(Node):
         position_or_command: 'open', 'close', 또는 0.0~0.055 값
         """
         if position_or_command == 'open':
-            position = 0.055
+            position = 0.155
             status = "열기"
         elif position_or_command == 'close':
             position = 0.0
