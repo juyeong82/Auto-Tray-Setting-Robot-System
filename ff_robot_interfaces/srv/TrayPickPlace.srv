@@ -1,0 +1,13 @@
+# TrayPickPlace.srv
+# 트레이를 픽업하고 특정 위치에 배치하는 서비스
+
+# Request
+string action              # "PICK_TRAY" 또는 "PLACE_TRAY" 또는 "SERVE_TRAY"
+int32 tray_id             # 트레이 번호 (0 또는 1)
+geometry_msgs/Point target_position  # 목표 위치 (PLACE/SERVE일 때만 사용)
+
+---
+
+# Response
+bool success
+string message
