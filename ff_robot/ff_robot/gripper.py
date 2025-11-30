@@ -14,12 +14,12 @@ class GripperManager:
             "burger3": {"open": 800, "close": 600},
             
             # 사이드 (감자튀김, 너겟 등)
-            "fries":   {"open": 1100, "close": 900}, 
-            "nugget":  {"open": 1100, "close": 900},
+            "fries":   {"open": 1100, "close": 850}, 
+            "nugget":  {"open": 1100, "close": 850},
             
             # 음료 (캔 지름 약 66mm -> 62~63mm로 설정하여 적당히 텐션 유지)
-            "coke":    {"open": 850, "close": 630}, 
-            "cider":   {"open": 850, "close": 630},
+            "coke":    {"open": 850, "close": 640}, 
+            "cider":   {"open": 850, "close": 640},
         }
 
     def get_params(self, item):
