@@ -23,3 +23,8 @@ moveit_simple_controller_manager:
     type: FollowJointTrajectory
     joints:
       - rg2_finger_joint1
+
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.2
+  allowed_goal_duration_margin: 0.5
+  allowed_start_tolerance: 0.05  # <--- [핵심] 0.01에서 0.05로 변경 (없으면 추가)

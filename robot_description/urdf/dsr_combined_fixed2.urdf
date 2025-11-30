@@ -48,7 +48,7 @@
     <origin rpy="0 0 0" xyz="0 0 0.1"/>
     <axis xyz="0 0 1"/>
     <limit effort="163" lower="-6.2832" upper="6.2832" velocity="2.618"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_1">
     <inertial>
@@ -66,11 +66,7 @@
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
         <mesh filename="package://dsr_description2/meshes/m0609_white/MF0609_1_0.dae" scale="0.001 0.001 0.001"/>
-      </geometry>      - rg2_l_finger_2_joint
-      - rg2_l_finger_passive_joint
-      - rg2_r_finger_1_joint
-      - rg2_r_finger_2_joint
-      - rg2_r_finger_passive_joint
+      </geometry>
     </visual>
   </link>
   <!-- joint2 -->
@@ -80,7 +76,7 @@
     <origin rpy="0 -1.571 -1.571" xyz="0 0.0062 0"/>
     <axis xyz="0 0 1"/>
     <limit effort="163" lower="-6.2832" upper="6.2832" velocity="2.618"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_2">
     <inertial>
@@ -132,7 +128,7 @@
     <origin rpy="0 0 1.571" xyz="0.411 0 0"/>
     <axis xyz="0 0 1"/>
     <limit effort="96" lower="-2.618" upper="2.618" velocity="3.1416"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_3">
     <inertial>
@@ -160,7 +156,7 @@
     <origin rpy="1.571 0 0" xyz="0 -0.368 0"/>
     <axis xyz="0 0 1"/>
     <limit effort="50" lower="-6.2832" upper="6.2832" velocity="3.927"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_4">
     <inertial>
@@ -200,7 +196,7 @@
     <origin rpy="-1.571 0 0" xyz="0 0 0"/>
     <axis xyz="0 0 1"/>
     <limit effort="50" lower="-6.2832" upper="6.2832" velocity="3.927"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_5">
     <inertial>
@@ -228,7 +224,7 @@
     <origin rpy="1.571 0 0" xyz="0 -0.121 0"/>
     <axis xyz="0 0 1"/>
     <limit effort="50" lower="-6.2832" upper="6.2832" velocity="3.927"/>
-    <dynamics damping="1.0" friction="10.0"/>
+    <dynamics friction="0"/>
   </joint>
   <link name="link_6">
     <inertial>
@@ -634,6 +630,7 @@
     <selfCollide>false</selfCollide>
   </gazebo>
 
+
   <material name="d435i_black">
     <color rgba="0.1 0.1 0.1 1"/>
   </material>
@@ -706,30 +703,6 @@
     </sensor>
   </gazebo>
 
-
-  <!-- Gazebo Joint PID Gains for Position Control -->
-  <gazebo reference="joint_1">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="joint_2">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="joint_3">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="joint_4">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="joint_5">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="joint_6">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-  <gazebo reference="rg2_finger_joint1">
-    <implicitSpringDamper>true</implicitSpringDamper>
-  </gazebo>
-
   <ros2_control name="GazeboSystem" type="system">
     <hardware>
       <plugin>gazebo_ros2_control/GazeboSystem</plugin>
@@ -744,37 +717,27 @@
     </joint>
     <joint name="joint_2">
       <command_interface name="position"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="joint_3">
       <command_interface name="position"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="joint_4">
       <command_interface name="position"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="joint_5">
       <command_interface name="position"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="joint_6">
       <command_interface name="position"/>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
 
@@ -786,36 +749,26 @@
       <state_interface name="velocity"/>
     </joint>
 
-    <!-- <joint name="rg2_l_finger_2_joint">
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+    <joint name="rg2_l_finger_2_joint">
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="rg2_l_finger_passive_joint">
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="rg2_r_finger_1_joint">
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="rg2_r_finger_2_joint">
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
     <joint name="rg2_r_finger_passive_joint">
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
+      <state_interface name="position"/>
       <state_interface name="velocity"/>
-    </joint> -->
+    </joint>
 
     <!-- <joint name="rg2_finger_joint2">
       <param name="mimic">rg2_finger_joint1</param>
@@ -826,11 +779,13 @@
 
   </ros2_control>
 
+  
   <gazebo>
     <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
       <parameters>/home/juyeong/ros2_ws/install/dsr_moveit_config/share/dsr_moveit_config/config/ros2_controllers.yaml</parameters>
     </plugin>
     
+    <!-- Mimic Joint Plugins for RG2 4-Bar Linkage -->
     <plugin name="mimic_l_finger_2" filename="libroboticsgroup_upatras_gazebo_mimic_joint_plugin.so">
       <joint>rg2_finger_joint1</joint>
       <mimicJoint>rg2_l_finger_2_joint</mimicJoint>
