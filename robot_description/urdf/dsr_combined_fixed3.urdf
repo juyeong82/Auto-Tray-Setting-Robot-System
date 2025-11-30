@@ -634,30 +634,28 @@
     <selfCollide>false</selfCollide>
   </gazebo>
 
-  <material name="d435i_black">
-    <color rgba="0.1 0.1 0.1 1"/>
+  <material name="aluminum">
+    <color rgba="0.5 0.5 0.5 1"/>
   </material>
 
   <joint name="camera_mount_joint" type="fixed">
-    <!-- <origin xyz="0.05 0 0.03" rpy="0 0 0"/> -->
-    <!-- <origin xyz="-0.05 0 -0.03" rpy="3.14159 0 3.14159"/> -->
-    <origin xyz="-0.05 0 -0.03" rpy="0 -1.5708 0"/>
+    <origin xyz="-0.05 0 0.01" rpy="0 -1.5708 0"/> 
     <parent link="link_6"/>
     <child link="camera_base_link"/>
   </joint>
 
   <link name="camera_base_link">
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.0149 0 0.0125" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <box size="0.025 0.09 0.025"/>
+        <mesh filename="package://robot_description/meshes/d435.dae" />
       </geometry>
-      <material name="d435i_black"/>
+      <material name="aluminum"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0.0175 0.0125" rpy="0 0 0"/>
       <geometry>
-        <box size="0.025 0.09 0.025"/>
+        <box size="0.02505 0.090 0.025"/>
       </geometry>
     </collision>
     <inertial>
@@ -666,20 +664,20 @@
       <inertia ixx="0.003881243" ixy="0.0" ixz="0.0" iyy="0.000498940" iyz="0.0" izz="0.003879257"/>
     </inertial>
   </link>
-  <!-- 광학용 가짜 링크(Optical Frame) -->
+
   <link name="camera_depth_optical_frame"/>
 
   <joint name="camera_depth_optical_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/> <parent link="camera_base_link"/>
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+    <parent link="camera_base_link"/>
     <child link="camera_depth_optical_frame"/>
   </joint>
 
   <gazebo reference="camera_base_link">
     <sensor name="d435i" type="depth">
-      <visualize>true</visualize>
-      <update_rate>30.0</update_rate>
+      <visualize>true</visualize> <update_rate>30.0</update_rate>
       <camera name="head">
-        <horizontal_fov>1.518</horizontal_fov>
+        <horizontal_fov>1.518</horizontal_fov> 
         <image>
           <width>640</width>
           <height>480</height>
@@ -696,9 +694,9 @@
           <remapping>d435i/image_raw:=camera/color/image_raw</remapping>
           <remapping>d435i/depth/image_raw:=camera/depth/image_rect_raw</remapping>
           <remapping>d435i/points:=camera/depth/color/points</remapping>
+          <remapping>d435i/camera_info:=d435i/camera_info</remapping>
         </ros>
         <camera_name>d435i</camera_name>
-        <!-- <frame_name>camera_base_link</frame_name> -->
         <frame_name>camera_depth_optical_frame</frame_name>
         <min_depth>0.1</min_depth>
         <max_depth>10.0</max_depth>
