@@ -3,7 +3,10 @@ controller_manager:
   ros__parameters:
     # update_rate: 100  # Hz
     # 컨트롤러 업데이트 주기가 Gazebo 시뮬레이션과 일치화
-    update_rate: 1000  # Hz
+    # update_rate: 1000  # Hz
+    # 카메라 동시 작동시 500으로 줄임
+    update_rate: 500  # Hz
+
 
     manipulator_controller:
       type: joint_trajectory_controller/JointTrajectoryController
