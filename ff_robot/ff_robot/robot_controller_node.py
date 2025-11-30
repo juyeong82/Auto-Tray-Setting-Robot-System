@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# robot_controller_node_gem.py (Speed 50 + Waypoint Fix)
+# robot_controller_node_gem.py (Calibration Tuning Ver)
 
 import rclpy
 from rclpy.node import Node
@@ -17,49 +17,47 @@ from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
 from ff_robot.gripper import GripperManager 
 
-# [설정] 로그 즉시 출력
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
-# [🎛️ 사용자 튜닝 섹션]
+# [🎛️ 캘리브레이션 튜닝 섹션] (여기를 조절하세요!)
 # ==============================================================================
+# "물체 위치가 바뀌면 못 잡는 문제"는 여기서 해결해야 합니다.
+# 카메라와 그리퍼 사이의 거리를 미세 조정합니다. (단위: mm)
+# 이 값을 바꾸면 화면상 모든 물체의 좌표가 일괄적으로 이동합니다.
 
-# 1. [속도] 전체 로봇 속도/가속도 설정 (50으로 감속)
-ROBOT_VEL = 20.0
-ROBOT_ACC = 20.0
+CALIB_FIX_X = 0.0   # 카메라가 생각보다 앞/뒤에 달려있다면 수정
+CALIB_FIX_Y = 0.0   # 카메라가 생각보다 좌/우에 달려있다면 수정
+CALIB_FIX_Z = 0.0   # (보통 건드릴 필요 없음)
 
-# 2. [경유지] 특이점 회피를 위한 중간 경유 자세 (JReady / Home)
-# 비전 인식 후, 이 자세를 거쳐서 Pick 위치로 내려갑니다.
-J_INTERMEDIATE_POS = [-23.82, 1.08, 91.17, -18.38, 80.61, -23.36] 
+# ==============================================================================
+# [🎛️ 아이템별 튜닝] (Z축 높이와 회전만 건드리는 것을 추천)
+# ==============================================================================
+# X, Y는 위 CALIB_FIX로 잡고, 여기서는 0.0으로 두세요.
 
-# 3. 픽 오프셋 (기존 값 유지)
-GLOBAL_OFFSET_X = -5.0     
-GLOBAL_OFFSET_Y = 120.0   
-GLOBAL_OFFSET_Z = 110.0   
+GLOBAL_OFFSET_X = 0.0     
+GLOBAL_OFFSET_Y = -15.0   
+GLOBAL_OFFSET_Z = -50.0   # 기본 픽 높이
 
-# 4. 아이템별 추가 오프셋
 ITEM_OFFSETS = {
-    "burger1": {"x": 0.0, "y": 0.0, "z": 10.0, "rx": -30.0, "ry": 180.0, "rz": 0.0}, 
-    "burger2": {"x": 0.0, "y": 0.0, "z": 10.0, "rx": -30.0, "ry": 180.0, "rz": 0.0},
-    "burger3": {"x": 0.0, "y": 0.0, "z": 10.0, "rx": -30.0, "ry": 180.0, "rz": 0.0},
-    "coke":    {"x": -5.0, "y": -10.0, "z": 35.0}, 
-    "cider":   {"x": -5.0, "y": -10.0, "z": 35.0},
-    "fries":   {"x": 5.0, "y": 0.0, "z": 0.0},
-    "nugget":  {"x": 5.0, "y": 0.0, "z": 0.0},
+    # X, Y는 0.0으로 초기화 권장
+    "burger1": {"x": 0.0, "y": 0.0, "z": 0.0, "rx": -30.0, "ry": 180.0, "rz": 0.0}, 
+    "burger2": {"x": 0.0, "y": 0.0, "z": 0.0, "rx": -30.0, "ry": 180.0, "rz": 0.0},
+    "burger3": {"x": 0.0, "y": 0.0, "z": 0.0, "rx": -30.0, "ry": 180.0, "rz": 0.0},
+    "coke":    {"x": 0.0, "y": 0.0, "z": 40.0}, 
+    "cider":   {"x": 0.0, "y": 0.0, "z": 40.0},
+    "fries":   {"x": 0.0, "y": 0.0, "z": 0.0},
+    "nugget":  {"x": 0.0, "y": 0.0, "z": 0.0},
 }
 
-# 5. 접근 높이
-APPROACH_HEIGHT = 50.0 
-
-# 6. 관측 자세 (수정된 값 적용)
+# 접근 높이
+APPROACH_HEIGHT = 100.0 
+# 관측 자세
 J_LOOK_POS = [40.05, 5.26, 58.84, -44.83, 133.16, -165.55]
-
-# 7. 임시 Place 위치
-TEMP_PLACE_POS = [300.0, 10.0, 200.0, 0.0, 180.0, 0.0]
-
-# 8. 안전 바닥 높이
+# 임시 Place
+TEMP_PLACE_POS = [300.0, 10.0, 400.0, 0.0, 180.0, 0.0]
+# 안전 높이
 SAFE_Z_FLOOR_LIMIT = 10.0 
-# ==============================================================================
 
 # --- 로봇 설정 ---
 ROBOT_ID = "dsr01"
@@ -67,7 +65,6 @@ ROBOT_MODEL = "m0609"
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
-# --- 전역 변수 ---
 node_ = None          
 dsr_control_node_ = None 
 manager = None
@@ -77,22 +74,31 @@ gripper_manager = None
 T_GRIPPER_TO_CAM = None
 
 # ==============================================================================
-# [설정 1] 캘리브레이션
+# [핵심] 캘리브레이션 로드 및 보정 적용
 # ==============================================================================
 def load_calibration():
     global T_GRIPPER_TO_CAM
     current_dir = os.path.dirname(os.path.abspath(__file__))
     npy_path = os.path.join(current_dir, "T_gripper2camera.npy")
+    
     if os.path.exists(npy_path):
-        T_GRIPPER_TO_CAM = np.load(npy_path)
-        print(f"✅ 캘리브레이션 로드: {npy_path}")
+        T_base = np.load(npy_path)
+        
+        # [수정] 캘리브레이션 미세 조정값 적용
+        # T_gripper2camera 행렬의 이동(Translation) 부분에 더함
+        # 주의: 이 좌표계는 "그리퍼 기준"입니다. (로봇 베이스 기준 아님)
+        T_base[0, 3] += (CALIB_FIX_X / 1000.0) # mm -> m 변환
+        T_base[1, 3] += (CALIB_FIX_Y / 1000.0)
+        T_base[2, 3] += (CALIB_FIX_Z / 1000.0)
+        
+        T_GRIPPER_TO_CAM = T_base
+        print(f"✅ 캘리브레이션 로드 및 보정 완료: {npy_path}")
+        print(f"   👉 적용된 보정값(mm): X={CALIB_FIX_X}, Y={CALIB_FIX_Y}, Z={CALIB_FIX_Z}")
     else:
         print(f"❌ [CRITICAL] 캘리브레이션 파일 없음!")
         sys.exit(1)
 
-# ==============================================================================
-# [설정 2] 가상 그리퍼
-# ==============================================================================
+# ... (RG, Math 함수 기존 동일) ...
 try:
     from ff_robot.onrobot import RG
     print("✅ Real Gripper Driver Loaded")
@@ -103,9 +109,6 @@ except ImportError:
         def close_gripper(self, force=None): print("   ✊ Close")
         def move_gripper(self, width): print(f"   👌 [Virtual] Move Width: {width}")
 
-# ==============================================================================
-# [Math] 좌표 변환
-# ==============================================================================
 def get_robot_pose_matrix(posx_list):
     x, y, z, rx, ry, rz = posx_list
     rot = R.from_euler("ZYZ", [rx, ry, rz], degrees=True).as_matrix()
@@ -122,6 +125,8 @@ def transform_camera_to_base(cam_xyz):
         if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
         
         T_base_gripper = get_robot_pose_matrix(curr_posx)
+        
+        # 여기서 이미 보정된 T_GRIPPER_TO_CAM을 사용함
         T_base_cam = T_base_gripper @ T_GRIPPER_TO_CAM
         
         p_cam = np.array([cam_xyz[0]*1000, cam_xyz[1]*1000, cam_xyz[2]*1000, 1.0])
@@ -131,9 +136,6 @@ def transform_camera_to_base(cam_xyz):
         print(f"   ❌ 변환 에러: {e}")
         return None
 
-# ==============================================================================
-# [Motion] 안전 이동 함수 (속도 50 적용)
-# ==============================================================================
 def wait_for_motion():
     from DSR_ROBOT2 import check_motion
     time.sleep(0.1)
@@ -145,11 +147,9 @@ def wait_for_motion():
 def safe_movel(pos, desc="이동"):
     global node_
     from DSR_ROBOT2 import movel, DR_BASE, DR_MV_MOD_ABS
-    
     try:
         time.sleep(0.05) 
-        # [수정] 전역 속도 변수 사용 (50.0)
-        movel(pos, vel=[ROBOT_VEL, ROBOT_VEL], acc=[ROBOT_ACC, ROBOT_ACC], ref=DR_BASE, mod=DR_MV_MOD_ABS)
+        movel(pos, vel=[100.0, 100.0], acc=[100.0, 100.0], ref=DR_BASE, mod=DR_MV_MOD_ABS)
         wait_for_motion()
         time.sleep(0.05) 
         return True 
@@ -157,75 +157,48 @@ def safe_movel(pos, desc="이동"):
         node_.get_logger().error(f"   ❌ {desc} 오류: {e}")
         return False
 
-# ==============================================================================
-# [Action] Pick 동작
-# ==============================================================================
 def safe_move_and_pick(base_pos, item_name):
     global gripper_manager, node_
     
-    # 1. 오프셋 정보 가져오기
-    specific_offset = ITEM_OFFSETS.get(item_name, {})
+    # 1. 오프셋 계산 (공통 + 개별)
+    specific_offset = ITEM_OFFSETS.get(item_name, {"x":0.0, "y":0.0, "z":0.0})
     
-    # 위치 오프셋 적용
     target_x = base_pos[0] + GLOBAL_OFFSET_X + specific_offset.get("x", 0.0)
     target_y = base_pos[1] + GLOBAL_OFFSET_Y + specific_offset.get("y", 0.0)
     target_z = base_pos[2] + GLOBAL_OFFSET_Z + specific_offset.get("z", 0.0)
     
-    # [수정] 회전 오프셋 적용 (없으면 기본값 0, 180, 0 사용)
     target_rx = specific_offset.get("rx", 0.0)
     target_ry = specific_offset.get("ry", 180.0)
     target_rz = specific_offset.get("rz", 0.0)
 
-    # 로그 출력
-    if specific_offset:
+    if specific_offset["x"] != 0:
         node_.get_logger().info(f"   🔧 [{item_name}] 보정: {specific_offset}")
 
-    # 안전장치 (Z값 제한)
     if target_z < SAFE_Z_FLOOR_LIMIT:
-        node_.get_logger().warn(f"⚠️ Z값이 너무 낮음({target_z:.1f}) -> {SAFE_Z_FLOOR_LIMIT}mm로 제한")
         target_z = SAFE_Z_FLOOR_LIMIT
 
-    # 2. 최종 자세 결합 (설정된 rx, ry, rz 적용)
     pick_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
-    
-    # 접근(Approach) 좌표: 위치는 같고 높이만 다름 (회전은 Pick과 동일하게 유지)
     approach_pose = [target_x, target_y, target_z + APPROACH_HEIGHT, target_rx, target_ry, target_rz]
     
     node_.get_logger().info(f"   🎯 최종 Pick: {pick_pose}")
 
-    # --- 동작 시퀀스 ---
-    
-    # (1) 접근 (기울어진 상태로 접근)
     if not safe_movel(approach_pose, "접근"): return False
-    
-    # (2) 그리퍼 준비
-    if gripper_manager:
-        gripper_manager.prepare_grip(item_name)
-
-    # (3) 하강
+    if gripper_manager: gripper_manager.prepare_grip(item_name)
     if not safe_movel(pick_pose, "하강"): return False
     
-    # (4) 집기
-    if gripper_manager:
-        gripper_manager.execute_grip(item_name)
+    if gripper_manager: gripper_manager.execute_grip(item_name)
     else:
         if gripper: gripper.close_gripper()
         time.sleep(0.5)
 
-    # (5) 상승 (그대로 올라옴)
     if not safe_movel(approach_pose, "상승"): return False
-    
     return True
 
-# ==============================================================================
-# [Task Thread] 로봇 업무 로직
-# ==============================================================================
+# ... (call_vision_service, perform_task 등 로직 동일) ...
 def call_vision_service(target_name):
     global node_, vision_cli
-    
     print(f"   [Debug] 비전 호출: {target_name}")
-    if vision_cli is None or not vision_cli.service_is_ready():
-        return None
+    if vision_cli is None or not vision_cli.service_is_ready(): return None
     
     req = DetectObject.Request()
     req.target_object_id = target_name
@@ -233,9 +206,7 @@ def call_vision_service(target_name):
     
     start = time.time()
     while not future.done():
-        if time.time() - start > 10.0: 
-            print("   ⚠️ [Timeout] Vision 응답 없음")
-            return None
+        if time.time() - start > 10.0: return None
         time.sleep(0.1) 
     try:
         res = future.result()
@@ -251,19 +222,17 @@ def perform_robot_task():
     try:
         gripper = RG("rg2", "192.168.1.1", "502") 
         node_.get_logger().info("✅ Real Gripper Connected")
-    except Exception as e:
-        node_.get_logger().warn(f"⚠️ Real Gripper Fail: {e}")
+    except:
         gripper = RG()
 
     gripper_manager = GripperManager(gripper)
 
-    # 초기 이동 (관측)
+    # 초기 이동
     node_.get_logger().info(f"🔭 관측 위치 이동... {J_LOOK_POS}")
     try:
-        movej(J_LOOK_POS, vel=ROBOT_VEL, acc=ROBOT_ACC)
+        movej(J_LOOK_POS, vel=40.0, acc=40.0)
         wait_for_motion()
-    except Exception as e:
-        node_.get_logger().error(f"❌ 초기 이동 실패: {e}")
+    except: pass
     
     node_.get_logger().info("[Task] 준비 완료.")
 
@@ -278,54 +247,35 @@ def perform_robot_task():
             node_.get_logger().info(f"========================================")
             node_.get_logger().info(f"🔎 [Search] '{target_item}'")
 
-            # 1. 관측 위치 복귀
             try:
-                movej(J_LOOK_POS, vel=ROBOT_VEL, acc=ROBOT_ACC)
+                movej(J_LOOK_POS, vel=60.0, acc=60.0)
                 wait_for_motion()
+                # 안정화 대기
+                time.sleep(1.0)
             except: pass
 
-            if gripper_manager:
-                gripper_manager.prepare_grip(target_item)
+            if gripper_manager: gripper_manager.prepare_grip(target_item)
 
-            # 2. 비전
             cam_xyz = call_vision_service(target_item)
             if cam_xyz is None:
-                node_.get_logger().warn("   ⚠️ 타겟 못 찾음")
+                node_.get_logger().warn("   ⚠️ 타겟 못 찾음 (Retry)")
                 time.sleep(1.0)
                 continue
 
-            # 3. 변환
             base_xyz = transform_camera_to_base(cam_xyz)
             if base_xyz is None:
                 time.sleep(1.0)
                 continue
 
-            # ========================================================
-            # [핵심 수정] 중간 경유지 이동 (특이점 회피)
-            # 관측 자세 -> 중간 자세(movej) -> 픽 접근(movel)
-            # ========================================================
-            node_.get_logger().info(f"   🛡️ 특이점 회피: 중간 경유지 이동...")
-            try:
-                movej(J_INTERMEDIATE_POS, vel=ROBOT_VEL, acc=ROBOT_ACC)
-                wait_for_motion()
-            except Exception as e:
-                node_.get_logger().error(f"❌ 경유지 이동 실패: {e}")
-                continue
-
-            # 4. Pick
             if safe_move_and_pick(base_xyz, target_item):
                 node_.get_logger().info("✅ Pick 성공!")
                 
-                # 5. Place
                 node_.get_logger().info(f"🚚 Place 이동...")
-                
-                # Place 하러 갈 때도 안전하게 경유지 들름 (선택 사항)
-                # movej(J_INTERMEDIATE_POS, vel=ROBOT_VEL, acc=ROBOT_ACC)
-                # wait_for_motion()
-
                 if safe_movel(TEMP_PLACE_POS, "Place"):
                     if gripper_manager:
                         gripper_manager.release(target_item)
+                    
+                    # 완료 처리
                     manager.clear_slot(0) 
                     node_.get_logger().info("🎉 작업 완료.")
             else:
@@ -337,14 +287,10 @@ def perform_robot_task():
             node_.get_logger().error(f"Task Error: {e}")
             time.sleep(1.0)
 
-# ==============================================================================
-# [Main]
-# ==============================================================================
 def handle_order_request(request, response):
     global manager, node_
     node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}")
     success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
-    
     if success:
         manager.add_order_to_slot(f"ORD-{int(time.time())}", request.item_names, request.item_quantities)
         response.assigned_order_id = f"ORD-{int(time.time())}"
@@ -361,21 +307,16 @@ def main(args=None):
     rclpy.init(args=args)
     load_calibration()
     manager = SlotManager()
-    
     node_ = rclpy.create_node("robot_controller_node", namespace=ROBOT_ID)
     dsr_control_node_ = rclpy.create_node("dsr_internal_node", namespace=ROBOT_ID)
     DR_init.__dsr__node = dsr_control_node_ 
-
     cb_group = ReentrantCallbackGroup()
     node_.create_service(OrderService, '/dsr01/order_service', handle_order_request, callback_group=cb_group)
     vision_cli = node_.create_client(DetectObject, '/dsr01/detect_object', callback_group=cb_group)
-
     executor = MultiThreadedExecutor()
     executor.add_node(node_) 
-
     t_robot = threading.Thread(target=perform_robot_task, daemon=True)
     t_robot.start()
-    
     try: executor.spin()
     except: pass
     finally:
