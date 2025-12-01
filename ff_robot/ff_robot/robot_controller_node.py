@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# robot_controller_node_gem.py (Relative X Scaling & Directional Z Tilt)
+# robot_controller_node_gem.py (Updated Item Heights)
 
 import rclpy
 from rclpy.node import Node
@@ -17,61 +17,63 @@ from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
 from ff_robot.gripper import GripperManager 
 
-# [설정] 로그 즉시 출력
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
-# [🎛️ 튜닝 섹션]
+# 🎛️ CONFIGURATION
 # ==============================================================================
-
-# 1. [공통] 위치 보정 (최종 오프셋)
 GLOBAL_OFFSET_X = 0.0     
 GLOBAL_OFFSET_Y = 0.0
 GLOBAL_OFFSET_Z = -60.0     
 
-# 2. [개별] 아이템별 설정
+# [Pick 오프셋] 잡을 때 보정치
 ITEM_OFFSETS = {
-    # [버거]
     "burger1": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None}, 
     "burger2": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "burger3": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
-    
-    # [음료/사이드]
     "coke":    {"z": 20.0, "rx": 0.0, "ry": 180.0, "rz": None}, 
     "cider":   {"z": 20.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "fries":   {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "nugget":  {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
 }
 
-# 3. [보정] 특정 아이템 대상 보정 설정
-TARGET_CORRECTION_ITEMS = ['cider', 'coke', 'fries', 'nugget'] 
+# [Place 높이 설정] 아이템 높이 (단위: mm)
+# 트레이 바닥(-24.0) + 이 높이 + 안전마진(5.0) 위치에 놓게 됨
+ITEM_PLACE_Z_OFFSET = {
+    "burger1": 30.0,  "burger2": 30.0,  "burger3": 30.0,  # 3cm
+    "fries":   65.0,  "nugget":  65.0,                    # 6.5cm
+    "coke":    125.0, "cider":   125.0                    # 12.5cm
+}
 
-# A. X축 스케일링 (관측 위치 기준 상대 거리 확장)
-# 관측 위치로부터 100mm 떨어지면 -> 105mm 이동 (1.05배)
+SCALE_X_TARGETS = ['cider', 'coke', 'fries', 'nugget']
+SCALE_Y_TARGETS = ['burger1', 'burger2', 'burger3']
+
 SCALE_FACTOR_X = 1.05 
+SCALE_FACTOR_Y = 1.05
+TILT_FACTOR_X = 0.10
 
-# B. Z축 기울기 보정 (단, +X 방향일 때만 적용)
-# +X 방향으로 갈수록 바닥이 낮아짐(로봇이 들림) -> Z를 더 내려야 함
-TILT_FACTOR_X = 0.15 
+# [Pick 동작 관련]
+APPROACH_HEIGHT = 100.0      
+EXTRA_LIFT_HEIGHT = 30.0     # Pick 후 3cm 더 상승
 
-# 4. 접근 높이
-APPROACH_HEIGHT = 100.0
-
-# 5. 관측 자세 (Joint)
 J_LOOK_POS = [-45.0, 20.0, 30.0, 0.0, 130.0, 135.0]
 
-# 6. 임시 배치 위치
-TEMP_PLACE_POS = [300.0, 10.0, 200.0, 0.0, 180.0, 0.0]
+# [트레이 좌표]
+TRAY_0_POS = [305.0, 20.0, 0.0, 43.35, -180.0, -135.0]
+TRAY_1_POS = [535.0, 20.0, 0.0, 43.35, -180.0, -135.0]
 
-# 7. 안전 바닥 높이
+# [바닥 및 안전 상수]
+TRAY_FLOOR_Z = -24.0     # 실측된 트레이 바닥 높이
+DROP_SAFETY_MARGIN = 5.0 # 바닥 충돌 방지용 여유 (5mm 띄워서 놓기)
+
 SAFE_Z_FLOOR_LIMIT = -15.0 
-# ==============================================================================
 
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
+# Global Handles
 node_ = None          
 dsr_control_node_ = None 
 manager = None
@@ -86,20 +88,16 @@ def load_calibration():
     npy_path = os.path.join(current_dir, "T_gripper2camera.npy")
     if os.path.exists(npy_path):
         T_GRIPPER_TO_CAM = np.load(npy_path)
-        print(f"✅ 캘리브레이션 로드: {npy_path}")
     else:
-        print(f"❌ [CRITICAL] 캘리브레이션 파일 없음!")
         sys.exit(1)
 
 try:
     from ff_robot.onrobot import RG
-    print("✅ Real Gripper Driver Loaded")
 except ImportError:
     class RG:
         def __init__(self, *args): pass
         def open_gripper(self): print("   👐 [Virtual] Open")
         def close_gripper(self, force=None): print("   ✊ Close")
-        def move_gripper(self, width): print(f"   👌 [Virtual] Move Width: {width}")
 
 def get_robot_pose_matrix(posx_list):
     x, y, z, rx, ry, rz = posx_list
@@ -123,7 +121,6 @@ def transform_camera_to_base(cam_xyz):
         p_base = T_base_cam @ p_cam
         return p_base[:3]
     except Exception as e:
-        print(f"   ❌ 변환 에러: {e}")
         return None
 
 def wait_for_motion():
@@ -135,7 +132,6 @@ def wait_for_motion():
     return True
 
 def safe_movel(pos, desc="이동"):
-    global node_
     from DSR_ROBOT2 import movel, DR_BASE, DR_MV_MOD_ABS
     try:
         time.sleep(0.05) 
@@ -147,77 +143,43 @@ def safe_movel(pos, desc="이동"):
         node_.get_logger().error(f"   ❌ {desc} 오류: {e}")
         return False
 
-# ==============================================================================
-# [Action] Pick 동작 (Relative Scaling & Directional Tilt)
-# ==============================================================================
-def safe_move_and_pick(base_pos, item_name, ref_x_pos):
-    """
-    ref_x_pos: 관측 위치(Look Pose)에서의 로봇 Base X좌표
-    """
-    global gripper_manager, node_
-    
+# Pick 동작 (상승 포함)
+def safe_move_and_pick(base_pos, item_name, ref_x_pos, ref_y_pos):
     offset_info = ITEM_OFFSETS.get(item_name, {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None})
-    
-    raw_x = base_pos[0]
-    raw_y = base_pos[1]
-    raw_z = base_pos[2]
+    raw_x, raw_y, raw_z = base_pos[0], base_pos[1], base_pos[2]
 
-    # ==========================================================
-    # [보정 로직] 1. 관측위치 기준 X 스케일링 / 2. +X 방향만 Z 보정
-    # ==========================================================
-    if item_name in TARGET_CORRECTION_ITEMS:
-        # 1. 관측 위치로부터의 거리(Delta)
+    # 보정 로직
+    if item_name in SCALE_X_TARGETS:
         delta_x = raw_x - ref_x_pos
-        
-        # 2. X축 스케일링 (방향 상관없이 1.05배 확장)
         scaled_delta_x = delta_x * SCALE_FACTOR_X
-        
-        # 보정된 절대 X좌표
         target_x = ref_x_pos + scaled_delta_x + GLOBAL_OFFSET_X
-        
-        # 3. Z축 기울기 보정 (조건: Delta > 0, 즉 +X 방향일 때만)
         tilt_correction_z = 0.0
-        
-        if delta_x > 0:
-            # +X 방향: 멀리 갈수록 Z를 깎음 (더 내려감)
+        if delta_x > 0: 
             tilt_correction_z = scaled_delta_x * TILT_FACTOR_X
-            node_.get_logger().info(
-                f"   📉 [Tilt 적용] +X 방향 감지! Z 보정: -{tilt_correction_z:.1f}mm"
-            )
-        else:
-            # -X 방향: 보정 없음
-            node_.get_logger().info(
-                f"   ➡️ [Tilt 패스] -X 방향임. 보정 없음."
-            )
-
-        node_.get_logger().info(
-            f"   🔧 [좌표 보정] Delta({delta_x:.1f}->{scaled_delta_x:.1f}) / Final Z_Adj(-{tilt_correction_z:.1f})"
-        )
-        
         target_y = raw_y + GLOBAL_OFFSET_Y
         target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"] - tilt_correction_z
-
+    elif item_name in SCALE_Y_TARGETS:
+        delta_y = raw_y - ref_y_pos
+        scaled_delta_y = delta_y * SCALE_FACTOR_Y
+        target_x = raw_x + GLOBAL_OFFSET_X
+        target_y = ref_y_pos + scaled_delta_y + GLOBAL_OFFSET_Y
+        target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"]
     else:
-        # 보정 대상 아님 (버거 등)
         target_x = raw_x + GLOBAL_OFFSET_X
         target_y = raw_y + GLOBAL_OFFSET_Y
         target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"]
-    # ==========================================================
 
-    # 회전값
     target_rx = offset_info.get("rx", 0.0)
     target_ry = offset_info.get("ry", 180.0)
     target_rz = base_pos[5] if offset_info.get("rz") is None else offset_info["rz"]
 
-    # 안전장치
-    if target_z < SAFE_Z_FLOOR_LIMIT:
-        node_.get_logger().warn(f"⚠️ Z Safe Limit: {target_z:.1f} -> {SAFE_Z_FLOOR_LIMIT}")
-        target_z = SAFE_Z_FLOOR_LIMIT
+    if target_z < SAFE_Z_FLOOR_LIMIT: target_z = SAFE_Z_FLOOR_LIMIT
 
     pick_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
     approach_pose = [target_x, target_y, target_z + APPROACH_HEIGHT, target_rx, target_ry, target_rz]
+    lift_pose = [target_x, target_y, target_z + APPROACH_HEIGHT + EXTRA_LIFT_HEIGHT, target_rx, target_ry, target_rz]
     
-    node_.get_logger().info(f"   🎯 Pick Pose: {pick_pose}")
+    node_.get_logger().info(f"   🎯 Pick: {pick_pose}")
 
     if not safe_movel(approach_pose, "접근"): return False
     if gripper_manager: gripper_manager.prepare_grip(item_name)
@@ -226,14 +188,13 @@ def safe_move_and_pick(base_pos, item_name, ref_x_pos):
     else:
         if gripper: gripper.close_gripper()
         time.sleep(0.5)
-    if not safe_movel(approach_pose, "상승"): return False
+        
+    # 집고 나서 높게 상승 (현재 이 높이가 안전 높이가 됨)
+    if not safe_movel(lift_pose, "상승 (High)"): return False
+    
     return True
 
-# ==============================================================================
-# [Task Thread] 
-# ==============================================================================
 def call_vision_service(target_name):
-    global node_, vision_cli
     if vision_cli is None or not vision_cli.service_is_ready(): return None
     req = DetectObject.Request()
     req.target_object_id = target_name
@@ -243,7 +204,6 @@ def call_vision_service(target_name):
     while not future.done():
         if time.time() - start > 60.0: return None
         time.sleep(0.1) 
-    
     try:
         res = future.result()
         if res.found:
@@ -252,7 +212,7 @@ def call_vision_service(target_name):
     return None
 
 def perform_robot_task():
-    global node_, manager, gripper, gripper_manager
+    global manager, gripper_manager
     try: from DSR_ROBOT2 import movej, get_current_posx
     except: return
 
@@ -260,13 +220,12 @@ def perform_robot_task():
     except: gripper = RG()
     gripper_manager = GripperManager(gripper)
 
-    # 1. 초기 이동
     try:
         movej(J_LOOK_POS, vel=50.0, acc=50.0)
         wait_for_motion()
     except: pass
     
-    node_.get_logger().info("[Task] 준비 완료.")
+    node_.get_logger().info("[Task] Robot Ready.")
 
     while rclpy.ok():
         try:
@@ -275,45 +234,107 @@ def perform_robot_task():
                 time.sleep(1.0) 
                 continue
 
-            target_item = needed_items[0]
-            node_.get_logger().info(f"🔎 [Search] '{target_item}'")
-
-            # 2. 관측 위치로 이동
+            node_.get_logger().info("🔭 관측 위치로 이동 중...")
             try:
                 movej(J_LOOK_POS, vel=50.0, acc=50.0)
                 wait_for_motion()
-                time.sleep(1.0)
+                time.sleep(0.5)
             except: pass
 
-            # 3. [중요] 관측 위치에서의 로봇 좌표(Reference X) 저장
+            target_item = None
+            cam_pose = None
+            
+            for item in needed_items:
+                node_.get_logger().info(f"🔎 [Check] '{item}' 찾는 중...")
+                pose_result = call_vision_service(item)
+                if pose_result is not None:
+                    target_item = item
+                    cam_pose = pose_result
+                    node_.get_logger().info(f"✨ '{item}' 발견! 작업 시작.")
+                    break 
+                else:
+                    node_.get_logger().info(f"   💨 '{item}' 안 보임.")
+            
+            if target_item is None or cam_pose is None:
+                node_.get_logger().warn("💤 물체 없음. 대기 중...")
+                time.sleep(1.0)
+                continue
+            
+            if gripper_manager: gripper_manager.prepare_grip(target_item)
+
             try:
                 curr_pos = get_current_posx()
                 if isinstance(curr_pos, tuple): curr_pos = curr_pos[0]
                 ref_x_pos = curr_pos[0] 
-                # node_.get_logger().info(f"   📍 기준 X좌표: {ref_x_pos:.1f}")
-            except:
+                ref_y_pos = curr_pos[1]
+            except: 
                 ref_x_pos = 0.0 
-
-            if gripper_manager: gripper_manager.prepare_grip(target_item)
-
-            cam_pose = call_vision_service(target_item)
-            if cam_pose is None:
-                time.sleep(1.0)
-                continue
+                ref_y_pos = 0.0
 
             base_xyz = transform_camera_to_base(cam_pose[:3])
             if base_xyz is None: continue
             
             base_pose_full = [base_xyz[0], base_xyz[1], base_xyz[2], 0, 0, cam_pose[5]]
             
-            # 4. ref_x_pos를 인자로 전달
-            if safe_move_and_pick(base_pose_full, target_item, ref_x_pos):
-                node_.get_logger().info("✅ Pick 성공!")
-                if safe_movel(TEMP_PLACE_POS, "Place"):
-                    if gripper_manager: gripper_manager.release(target_item)
-                    manager.clear_slot(0) 
+            # [Pick 실행] (집고 나서 높은 곳에 떠있음)
+            if safe_move_and_pick(base_pose_full, target_item, ref_x_pos, ref_y_pos):
+                node_.get_logger().info("✅ Pick Success")
+                
+                # 1. 목적지 결정
+                target_slot_id = manager.peek_target_slot(target_item)
+                base_tray_pos = TRAY_0_POS if target_slot_id == 0 else TRAY_1_POS
+                slot_data = manager.active_slots[target_slot_id]
+                current_idx = len(slot_data['placed_total'])
+                total_count = len(slot_data['needed'])
+                
+                # 2. X, Y 목적지 좌표 계산 (Z는 무시)
+                dest_pose = manager.get_tray_place_pose(base_tray_pos, current_idx, total_count)
+                
+                # ==========================================================
+                # [동적 안전 이동] Current Z 유지 -> 계산된 Z로 하강
+                # ==========================================================
+                
+                # A. 현재 로봇 높이 확인 (집고 올라온 높이)
+                try:
+                    current_robot_pos = get_current_posx()
+                    if isinstance(current_robot_pos, tuple): current_robot_pos = current_robot_pos[0]
+                    safe_travel_z = current_robot_pos[2] # 현재 높이를 안전 높이로 사용
+                except:
+                    safe_travel_z = 200.0 # 실패 시 기본 안전 높이
+                
+                # B. 상공 수평 이동 좌표 (Z = safe_travel_z)
+                approach_pose = list(dest_pose)
+                approach_pose[2] = safe_travel_z 
+                
+                node_.get_logger().info(f"🧱 [Approach] 높이 유지 이동 (Z={safe_travel_z:.1f})")
+                
+                if safe_movel(approach_pose, "Place Approach"):
+                    
+                    # C. 하강 좌표 계산 (바닥 + 아이템 높이 + 안전마진)
+                    offset_z = ITEM_PLACE_Z_OFFSET.get(target_item, 30.0) # 기본값 3cm
+                    final_z = TRAY_FLOOR_Z + offset_z + DROP_SAFETY_MARGIN
+                    
+                    drop_pose = list(approach_pose)
+                    drop_pose[2] = final_z
+                    
+                    node_.get_logger().info(f"⬇️ [Descend] 하강 (Z={final_z:.1f}): {target_item}")
+                    
+                    # D. 수직 하강
+                    if safe_movel(drop_pose, "Place Drop"):
+                        if gripper_manager: gripper_manager.release(target_item)
+                        
+                        processed_slot, is_finished = manager.process_item_and_check_complete(target_item)
+                        
+                        if processed_slot is not None:
+                            if is_finished:
+                                node_.get_logger().info(f"🎉 Slot {processed_slot} Finished!")
+                                manager.clear_slot(processed_slot) 
+                            else:
+                                node_.get_logger().info(f"✨ Slot {processed_slot}: Placed.")
+                # ==========================================================
+
             else:
-                node_.get_logger().error("❌ Pick 실패")
+                node_.get_logger().error("❌ Pick Failed")
 
             time.sleep(0.5)
         except Exception as e:
@@ -321,13 +342,12 @@ def perform_robot_task():
             time.sleep(1.0)
 
 def handle_order_request(request, response):
-    global manager, node_
-    node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}")
+    node_.get_logger().info(f"⚡ [Service] Order: {request.item_names}")
     success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
     if success:
         manager.add_order_to_slot(f"ORD-{int(time.time())}", request.item_names, request.item_quantities)
         response.assigned_order_id = f"ORD-{int(time.time())}"
-        response.message = "접수 완료"
+        response.message = "OK"
     else:
         response.assigned_order_id = ""
         response.message = msg
