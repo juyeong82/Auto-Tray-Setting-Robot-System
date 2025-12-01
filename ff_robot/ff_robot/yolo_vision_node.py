@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# yolo_vision_node.py (Final Optimized with Debug Publisher)
+# yolo_vision_node.py
+# [Final Fix] 사용자의 작동하는 코드를 기반으로 '가까운 순 정렬' 로직만 추가
 
 import rclpy
 from rclpy.node import Node
@@ -17,7 +18,7 @@ import os
 import math
 
 from ff_robot_interfaces.srv import DetectObject 
-from geometry_msgs.msg import Point, Quaternion
+from geometry_msgs.msg import Point
 
 # 거리 측정 실패 시 사용할 기본값 (60cm)
 FIXED_DEPTH_MM = 600.0 
@@ -27,7 +28,12 @@ class YoloVisionNode(Node):
         super().__init__('yolo_vision_node')
         
         self.get_logger().info("=========================================")
-        self.get_logger().info("🚀 YOLO Vision Node (Debug Pub Mode)")
+        # [안전장치] 파라미터 중복 선언 방지
+        try:
+            self.declare_parameter('use_sim_time', True)
+        except rclpy.exceptions.ParameterAlreadyDeclaredException:
+            pass
+        self.get_logger().info("🚀 YOLO Vision Node (Sorted by Nearest X)")
         self.get_logger().info("=========================================")
         
         # 1. 모델 경로 설정
@@ -57,7 +63,7 @@ class YoloVisionNode(Node):
         # 3. 콜백 그룹
         self.cb_group = ReentrantCallbackGroup()
 
-        # 4. 구독 설정
+        # 4. 구독 설정 (사용자 코드의 토픽명 유지)
         self.create_subscription(
             Image, '/camera/camera/color/image_raw', 
             self.color_callback, qos_profile, callback_group=self.cb_group
@@ -71,8 +77,7 @@ class YoloVisionNode(Node):
             self.info_callback, qos_profile, callback_group=self.cb_group
         )
 
-        # 5. [추가됨] 디버깅용 이미지 발행 퍼블리셔
-        # 큐 사이즈 10, 토픽 이름: /yolo_debug_image
+        # 5. 디버깅용 이미지 발행 퍼블리셔
         self.debug_image_pub = self.create_publisher(
             Image, 'yolo_debug_image', 10, callback_group=self.cb_group
         )
@@ -96,7 +101,6 @@ class YoloVisionNode(Node):
         if self.camera_intrinsics is None:
             K = msg.k
             self.camera_intrinsics = {'fx': K[0], 'fy': K[4], 'ppx': K[2], 'ppy': K[5]}
-            self.get_logger().info("✅ 카메라 파라미터 수신 완료")
 
     def pixel_to_3d_cam(self, u, v, depth_mm):
         if self.camera_intrinsics is None: return None
@@ -120,9 +124,10 @@ class YoloVisionNode(Node):
         self.get_logger().info(f"🔎 요청: '{target_name}'")
 
         wait_start = time.time()
+        # 타임아웃 5초
         while self.latest_color_img is None or self.latest_depth_img is None:
             if time.time() - wait_start > 5.0: 
-                self.get_logger().error("❌ [Timeout] 이미지 수신 실패")
+                self.get_logger().error("❌ [Timeout] 이미지 수신 실패 (토픽 확인 필요)")
                 response.found = False
                 return response
             time.sleep(0.01)
@@ -130,128 +135,111 @@ class YoloVisionNode(Node):
         # 추론 실행
         results = self.model(self.latest_color_img, verbose=False, conf=0.25)
         
-        found_target = False
-        cx, cy, w, h = 0, 0, 0, 0
-        rotation_deg = 0.0
-        confidence = 0.0
-        detected_names = []
+        # [수정] 모든 후보를 담을 리스트
+        candidates = []
+        
+        # 이미지 크기
+        h_img, w_img = self.latest_depth_img.shape
 
-        # 결과 파싱
         for r in results:
+            # 1. OBB 검색
             if r.obb is not None:
                 for box in r.obb:
                     cls_id = int(box.cls[0])
                     cls_name = self.model.names[cls_id]
-                    detected_names.append(cls_name)
+                    
                     if cls_name == target_name:
                         c_x, c_y, bw, bh, rot = box.xywhr[0].cpu().numpy()
-                        cx, cy, w, h = int(c_x), int(c_y), int(bw), int(bh)
+                        cx, cy = int(c_x), int(c_y)
                         rotation_deg = self.calculate_obb_rotation(box)
-                        confidence = float(box.conf[0])
-                        found_target = True
-                        break 
-            if not found_target and r.boxes is not None:
+                        conf = float(box.conf[0])
+                        
+                        # Depth 처리
+                        roi_w, roi_h = max(5, int(bw * 0.3)), max(5, int(bh * 0.3))
+                        x_min = max(0, cx - roi_w // 2); x_max = min(w_img, cx + roi_w // 2)
+                        y_min = max(0, cy - roi_h // 2); y_max = min(h_img, cy + roi_h // 2)
+                        roi = self.latest_depth_img[y_min:y_max, x_min:x_max]
+                        valid_depths = roi[roi > 0]
+                        depth_mm = float(np.median(valid_depths)) if len(valid_depths) > 0 else FIXED_DEPTH_MM
+
+                        # 3D 변환
+                        cam_point = self.pixel_to_3d_cam(cx, cy, depth_mm)
+                        if cam_point is not None:
+                            candidates.append({
+                                'x': cam_point[0], 'y': cam_point[1], 'z': cam_point[2],
+                                'rz': rotation_deg, 'w': float(bw), 'h': float(bh), 'conf': conf,
+                                'px': cx, 'py': cy
+                            })
+
+            # 2. 일반 Box 검색 (OBB 없을 때 대비)
+            if not candidates and r.boxes is not None:
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
                     cls_name = self.model.names[cls_id]
-                    detected_names.append(cls_name)
                     if cls_name == target_name:
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                         cx, cy = int((x1+x2)/2), int((y1+y2)/2)
                         w, h = abs(x2-x1), abs(y2-y1)
-                        confidence = float(box.conf[0])
-                        found_target = True
-                        break
+                        conf = float(box.conf[0])
+                        
+                        # Depth 처리
+                        roi_w, roi_h = max(5, int(w * 0.3)), max(5, int(h * 0.3))
+                        x_min = max(0, cx - roi_w // 2); x_max = min(w_img, cx + roi_w // 2)
+                        y_min = max(0, cy - roi_h // 2); y_max = min(h_img, cy + roi_h // 2)
+                        roi = self.latest_depth_img[y_min:y_max, x_min:x_max]
+                        valid_depths = roi[roi > 0]
+                        depth_mm = float(np.median(valid_depths)) if len(valid_depths) > 0 else FIXED_DEPTH_MM
 
-        # ==========================================================
-        # [추가된 부분] 디버깅 이미지 발행 로직 (조건부 실행)
-        # ==========================================================
-        if self.debug_image_pub.get_subscription_count() > 0:
-            try:
-                # YOLO가 박스/라벨을 그린 이미지를 생성 (.plot() 메서드)
-                annotated_frame = results[0].plot()
-                
-                # ROS Image 메시지로 변환 후 발행
-                debug_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
-                self.debug_image_pub.publish(debug_msg)
-                # self.get_logger().info("📸 디버깅 이미지 발행됨") # 너무 시끄러우면 주석 처리
-            except Exception as e:
-                self.get_logger().warn(f"디버깅 이미지 발행 중 오류: {e}")
-        # ==========================================================
+                        cam_point = self.pixel_to_3d_cam(cx, cy, depth_mm)
+                        if cam_point is not None:
+                            candidates.append({
+                                'x': cam_point[0], 'y': cam_point[1], 'z': cam_point[2],
+                                'rz': 0.0, 'w': float(w), 'h': float(h), 'conf': conf,
+                                'px': cx, 'py': cy
+                            })
 
-        self.get_logger().info(f"   👀 감지된 물체: {list(set(detected_names))}")
+        # [결과 처리]
+        if candidates:
+            # X축(거리) 기준 오름차순 정렬 -> 가장 작은 값(가까운 것) 선택
+            candidates.sort(key=lambda c: c['x'])
+            best = candidates[0]
+            
+            response.found = True
+            response.position = Point(x=best['x'], y=best['y'], z=best['z'])
+            response.rx = 0.0
+            response.ry = 180.0
+            response.rz = best['rz']
+            response.width = best['w']
+            response.height = best['h']
+            response.confidence = best['conf']
+            
+            self.get_logger().info(f"   ✅ 선택됨: X={best['x']:.3f}, Y={best['y']:.3f}, Z={best['z']:.3f}, Rz={best['rz']:.1f}")
+            self.get_logger().info(f"   📊 (총 {len(candidates)}개 발견 중 최단거리 선택)")
 
-        if not found_target:
-            self.get_logger().warn(f"   ⚠️ 타겟 '{target_name}' 없음")
-            response.found = False
-            return response
-
-        # Depth 추출 및 변환
-        h_img, w_img = self.latest_depth_img.shape
-        roi_w, roi_h = max(5, int(w * 0.3)), max(5, int(h * 0.3))
-        x_min = max(0, cx - roi_w // 2)
-        x_max = min(w_img, cx + roi_w // 2)
-        y_min = max(0, cy - roi_h // 2)
-        y_max = min(h_img, cy + roi_h // 2)
-        
-        roi = self.latest_depth_img[y_min:y_max, x_min:x_max]
-        valid_depths = roi[roi > 0]
-        
-        if len(valid_depths) > 0:
-            depth_mm = float(np.median(valid_depths))
-            self.get_logger().info(f"   📏 측정 거리: {depth_mm:.1f} mm")
+            # 디버깅 이미지 발행
+            if self.debug_image_pub.get_subscription_count() > 0:
+                try:
+                    annotated_frame = results[0].plot()
+                    # 선택된 타겟 강조 (초록색 원)
+                    cv2.circle(annotated_frame, (best['px'], best['py']), 8, (0, 255, 0), -1)
+                    cv2.putText(annotated_frame, "SELECTED", (best['px']-40, best['py']-20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    debug_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
+                    self.debug_image_pub.publish(debug_msg)
+                except Exception as e:
+                    self.get_logger().warn(f"디버깅 이미지 오류: {e}")
         else:
-            depth_mm = FIXED_DEPTH_MM
-            self.get_logger().warn(f"   ⚠️ Depth 0 -> 고정값 {FIXED_DEPTH_MM}mm 사용")
-
-        cam_point = self.pixel_to_3d_cam(cx, cy, depth_mm)
-        if cam_point is None:
-            self.get_logger().error("   ❌ 3D 변환 실패")
             response.found = False
-            return response
+            self.get_logger().warn(f"   ⚠️ 타겟 '{target_name}' 없음")
+            # 실패 시에도 원본 이미지는 보내주면 디버깅에 도움됨
+            if self.debug_image_pub.get_subscription_count() > 0:
+                try:
+                    annotated_frame = results[0].plot()
+                    debug_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
+                    self.debug_image_pub.publish(debug_msg)
+                except: pass
 
-        # ==========================================================
-        # [수정됨] 디버깅 이미지 발행 로직 (텍스트 + 중심점 추가)
-        # ==========================================================
-        if self.debug_image_pub.get_subscription_count() > 0:
-            try:
-                # 1. YOLO가 기본 박스/라벨을 그린 이미지 가져오기
-                annotated_frame = results[0].plot()
-
-                # 2. 중심점 표시 (빨간색 점)
-                # (이미지, 중심좌표, 반지름, 색상BGR, 두께(-1은 채움))
-                cv2.circle(annotated_frame, (cx, cy), 5, (0, 0, 255), -1)
-
-                # 3. Z값(Depth) 텍스트 표시
-                text = f"Z: {depth_mm:.1f} mm"
-                text_pos = (cx - 40, cy + 30)  # 중심보다 약간 아래, 왼쪽으로 살짝 이동
-
-                # 글씨가 잘 보이게 검은색 테두리(두께 4)를 먼저 그림
-                cv2.putText(annotated_frame, text, text_pos, 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-                
-                # 그 위에 노란색 글씨(두께 2)를 덮어씀
-                cv2.putText(annotated_frame, text, text_pos, 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-                # 4. ROS 메시지 변환 및 발행
-                debug_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
-                self.debug_image_pub.publish(debug_msg)
-                
-            except Exception as e:
-                self.get_logger().warn(f"디버깅 이미지 발행 중 오류: {e}")
-        # ==========================================================
-
-        response.found = True
-        response.position = Point(x=cam_point[0], y=cam_point[1], z=cam_point[2])
-        response.rx = 0.0
-        response.ry = 180.0
-        response.rz = rotation_deg
-        response.width = float(w)
-        response.height = float(h)
-        response.confidence = confidence
-        
-        self.get_logger().info(f"   ✅ 좌표 반환: X={cam_point[0]:.3f}, Y={cam_point[1]:.3f}, Z={cam_point[2]:.3f}")
         return response
 
 def main(args=None):
@@ -267,7 +255,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-        # cv2.destroyAllWindows() # 이제 창을 띄우지 않으므로 사실상 불필요하지만 안전을 위해 남둠
 
 if __name__ == '__main__':
     main()
