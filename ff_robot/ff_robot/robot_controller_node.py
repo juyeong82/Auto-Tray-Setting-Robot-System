@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
+<<<<<<< HEAD
 # robot_controller_node_gem.py (Updated Item Heights)
+=======
+# robot_controller_node.py (Threaded Fix + GripperManager + 2-step Pick)
+# MISSION 
+# 음성 매끄럽게!!!
+# 키오스크 주문 리스트 수량 확인!!!
+>>>>>>> 4ae35a520417ccb3ac51484cb30ba66c2cb14b2e
 
 import rclpy
 from rclpy.node import Node
@@ -342,7 +349,12 @@ def perform_robot_task():
             time.sleep(1.0)
 
 def handle_order_request(request, response):
+<<<<<<< HEAD
     node_.get_logger().info(f"⚡ [Service] Order: {request.item_names}")
+=======
+    global manager, node_
+    node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}, {list(request.item_quantities)}")
+>>>>>>> 4ae35a520417ccb3ac51484cb30ba66c2cb14b2e
     success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
     if success:
         manager.add_order_to_slot(f"ORD-{int(time.time())}", request.item_names, request.item_quantities)

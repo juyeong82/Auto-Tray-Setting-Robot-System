@@ -34,6 +34,8 @@ setup(
             'yolo_vision_node = ff_robot.yolo_vision_node:main',
             'kvu = ff_robot.kvu:main',
             'kiosk = ff_robot.kiosk:main',
+            'kiosk_v15 = ff_robot.kiosk_v15:main',
+            
         ],
     },
 )
