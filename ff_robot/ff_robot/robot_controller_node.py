@@ -3,6 +3,8 @@
 # MISSION 
 # 음성 매끄럽게!!!
 # 키오스크 주문 리스트 수량 확인!!!
+# # - 수량 데이터(item_quantities)를 순수 list로 변환하여 전송 (array 문제 해결)  -  누가 지웠던데 지우지 마세요 ㅜㅜ
+
 
 import rclpy
 from rclpy.node import Node
@@ -312,7 +314,7 @@ def perform_robot_task():
 # ==============================================================================
 def handle_order_request(request, response):
     global manager, node_
-    node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}")
+    node_.get_logger().info(f"⚡ [Service] 주문: {request.item_names}, {list(request.item_quantities)}")
     success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
     
     if success:
