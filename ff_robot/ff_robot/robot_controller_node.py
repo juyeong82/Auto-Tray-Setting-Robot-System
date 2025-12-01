@@ -20,7 +20,6 @@ from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
 from ff_robot.gripper import GripperManager 
 
-# [설정] 로그 즉시 출력
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
@@ -65,6 +64,7 @@ J_LOOK_POS = [-45.0, 20.0, 30.0, 0.0, 130.0, 135.0]
 
 # 6. 임시 배치 위치
 TEMP_PLACE_POS = [300.0, 10.0, 200.0, 0.0, 180.0, 0.0]
+SAFE_Z_FLOOR_LIMIT = -15.0 
 
 # 7. 안전 바닥 높이
 SAFE_Z_FLOOR_LIMIT = -15.0 
@@ -89,20 +89,16 @@ def load_calibration():
     npy_path = os.path.join(current_dir, "T_gripper2camera.npy")
     if os.path.exists(npy_path):
         T_GRIPPER_TO_CAM = np.load(npy_path)
-        print(f"✅ 캘리브레이션 로드: {npy_path}")
     else:
-        print(f"❌ [CRITICAL] 캘리브레이션 파일 없음!")
         sys.exit(1)
 
 try:
     from ff_robot.onrobot import RG
-    print("✅ Real Gripper Driver Loaded")
 except ImportError:
     class RG:
         def __init__(self, *args): pass
         def open_gripper(self): print("   👐 [Virtual] Open")
         def close_gripper(self, force=None): print("   ✊ Close")
-        def move_gripper(self, width): print(f"   👌 [Virtual] Move Width: {width}")
 
 def get_robot_pose_matrix(posx_list):
     x, y, z, rx, ry, rz = posx_list
@@ -126,7 +122,6 @@ def transform_camera_to_base(cam_xyz):
         p_base = T_base_cam @ p_cam
         return p_base[:3]
     except Exception as e:
-        print(f"   ❌ 변환 에러: {e}")
         return None
 
 def wait_for_motion():
@@ -138,7 +133,6 @@ def wait_for_motion():
     return True
 
 def safe_movel(pos, desc="이동"):
-    global node_
     from DSR_ROBOT2 import movel, DR_BASE, DR_MV_MOD_ABS
     try:
         time.sleep(0.05) 
@@ -269,7 +263,7 @@ def perform_robot_task():
         wait_for_motion()
     except: pass
     
-    node_.get_logger().info("[Task] 준비 완료.")
+    node_.get_logger().info("[Task] Robot Ready.")
 
     while rclpy.ok():
         try:
@@ -316,7 +310,7 @@ def perform_robot_task():
                     if gripper_manager: gripper_manager.release(target_item)
                     manager.clear_slot(0) 
             else:
-                node_.get_logger().error("❌ Pick 실패")
+                node_.get_logger().error("❌ Pick Failed")
 
             time.sleep(0.5)
         except Exception as e:

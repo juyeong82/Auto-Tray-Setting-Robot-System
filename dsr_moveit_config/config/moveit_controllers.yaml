@@ -1,0 +1,30 @@
+# MoveIt uses this configuration for controller management
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - manipulator_controller
+    - gripper_controller
+
+  manipulator_controller:
+    action_ns: follow_joint_trajectory  # ✅ 추가
+    type: FollowJointTrajectory
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+      
+  gripper_controller:
+    action_ns: follow_joint_trajectory  # ✅ 추가
+    type: FollowJointTrajectory
+    joints:
+      - rg2_finger_joint1
+
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.2
+  allowed_goal_duration_margin: 0.5
+  allowed_start_tolerance: 0.05  # <--- [핵심] 0.01에서 0.05로 변경 (없으면 추가)
