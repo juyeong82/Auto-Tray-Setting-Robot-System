@@ -1,2 +1,15 @@
 /DoosanBootcamp3rd
+/.vscode
 
+# 상위 폴더 빌드 결과 (워크스페이스 루트)
+../build/
+../install/
+../log/
+
+# api 제외
+.env
+
+# 현재 폴더 빌드 결과 (혹시 src에서 빌드했을 경우)
+build/
+install/
+log/
