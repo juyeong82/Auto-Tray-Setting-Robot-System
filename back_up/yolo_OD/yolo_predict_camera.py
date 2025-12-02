@@ -14,7 +14,7 @@ model_path = os.path.join(OUTPUT_DIR, model_filename)
 model = YOLO(model_path)
 
 # 카메라 열기 (0: 기본 내장 카메라)
-cap = cv2.VideoCapture(12)
+cap = cv2.VideoCapture(6)
 
 if not cap.isOpened():
     print("카메라를 열 수 없습니다.")

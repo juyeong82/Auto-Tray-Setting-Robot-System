@@ -1,64 +1,62 @@
 #!/usr/bin/env python3
-# dummy_vision_node.py
-
 import rclpy
 from rclpy.node import Node
-from ff_robot_interfaces.srv import DetectObject 
-from geometry_msgs.msg import Point, Quaternion
-from scipy.spatial.transform import Rotation as R
-import random
+from ff_robot_interfaces.srv import DetectObject
+from geometry_msgs.msg import Point
 
-class DummyVisionNode(Node):
+class FakeVisionNode(Node):
     def __init__(self):
-        super().__init__('dummy_vision_node')
-        # 로봇 컨트롤러가 찾는 네임스페이스와 동일하게 설정
-        self.srv = self.create_service(DetectObject, '/dsr01/detect_object', self.handle_detect_object)
-        self.get_logger().info("👀 가상 비전 센서 준비 완료 (Real Motion Ready)")
+        super().__init__('fake_vision_node')
+        
+        # 실제 로봇 컨트롤러가 요청하는 서비스 이름과 동일해야 함
+        self.srv = self.create_service(DetectObject, '/dsr01/detect_object', self.detect_callback)
+        
+        self.get_logger().info("👀 [Fake Vision] 가짜 비전 노드 시작 (YOLO 모사 중)")
+        self.get_logger().info("   - 요청이 오면 가제보 환경에 맞는 고정 좌표를 반환합니다.")
 
-    def handle_detect_object(self, request, response):
-        target_id = request.target_object_id
-        self.get_logger().info(f"요청 수신: '{target_id}'")
+        # =========================================================
+        # [📍 좌표 데이터베이스] 가제보 월드(hamburger_station.world)와 일치시킴
+        # 단위: mm (로봇 베이스 기준 상대 좌표로 변환됨)
+        # 로봇 베이스 높이가 0.4m이므로, 물체 높이 0.82m는 로봇 기준 Z=420mm 정도임
+        # =========================================================
+        self.known_locations = {
+            "burger1": {"x": 400.0, "y": 500.0, "z": 420.0, "rz": 0.0},
+            "fries":   {"x": 400.0, "y": 300.0, "z": 420.0, "rz": 0.0},
+            "coke":    {"x": 400.0, "y": 150.0, "z": 420.0, "rz": 0.0},
+            "tray":    {"x": 600.0, "y": 0.0,   "z": 390.0, "rz": 90.0} # 트레이 중심
+        }
 
-        # [중요] 물체를 찾았다고 가정 (확률 100%로 설정하여 테스트 용이하게)
-        response.found = True
-        
-        # 1. 위치 (Position)
-        # 로봇 베이스 기준 좌표 (단위: mm)
-        # x: 로봇 앞쪽 300~500mm
-        # y: 좌우 -200~200mm
-        # z: 0.0 (바닥 혹은 테이블 높이) -> 로봇이 집으러 내려갈 높이
-        response.position = Point(
-            x=random.uniform(250.0, 350.0), 
-            y=random.uniform(250.0, 350.0), 
-            z=250.0 
-        )
-        
-        # 2. 자세 (Orientation)
-        # 로봇이 그리퍼로 물건을 집으려면 '아래'를 봐야 합니다.
-        # 두산 로봇 기준 (Euler XYZ): rx=0, ry=180, rz=0 이 아래를 보는 자세입니다.
-        # 이를 쿼터니언으로 변환해서 보냅니다.
-        rot = R.from_euler('xyz', [0, 180, 0], degrees=True)
-        quat = rot.as_quat() # [x, y, z, w]
-        
-        response.orientation = Quaternion(
-            x=quat[0], y=quat[1], z=quat[2], w=quat[3]
-        )
-        
-        response.confidence = 0.99
-        response.message = f"Found {target_id} at {response.position.x:.1f}, {response.position.y:.1f}"
+    def detect_callback(self, request, response):
+        target_name = request.target_name.lower()
+        self.get_logger().info(f"📨 요청 수신: '{target_name}' 찾는 중...")
+
+        if target_name in self.known_locations:
+            loc = self.known_locations[target_name]
             
+            response.found = True
+            response.position = Point(x=loc['x'], y=loc['y'], z=loc['z'])
+            
+            # 오일러 각도 (Roll, Pitch는 고정, Yaw만 변경)
+            response.rx = 0.0
+            response.ry = 180.0 # 그리퍼가 아래를 보도록
+            response.rz = loc['rz']
+            
+            response.width = 80.0  # 가짜 너비 (mm)
+            response.height = 80.0 # 가짜 높이 (mm)
+            response.confidence = 0.99
+            
+            self.get_logger().info(f"   ✅ 발견! 좌표 전송: X={loc['x']}, Y={loc['y']}")
+        else:
+            response.found = False
+            self.get_logger().warn(f"   ❌ '{target_name}' 위치 정보 없음")
+
         return response
 
 def main(args=None):
     rclpy.init(args=args)
-    node = DummyVisionNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    node = FakeVisionNode()
+    rclpy.spin(node)
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

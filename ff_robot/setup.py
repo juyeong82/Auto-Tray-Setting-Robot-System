@@ -28,7 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_controller_node = ff_robot.robot_controller_node:main',
-            'robot_controller_tray = ff_robot.robot_controller_tray:main',
+            'robot_controller_gazebo = ff_robot.robot_controller_gazebo:main',
             'kiosk_gem = ff_robot.kiosk_gem:main',
             'kiosk_with_voice = ff_robot.kiosk_with_voice:main',
             'dummy_vision_node = ff_robot.dummy_vision_node:main',
@@ -37,6 +37,8 @@ setup(
             'yolo_vision_node_tray = ff_robot.yolo_vision_node_tray:main',
             'kvu = ff_robot.kvu:main',
             'kiosk = ff_robot.kiosk:main',
+            'kiosk_gazebo = ff_robot.kiosk_gazebo:main',
+            'obstacle_avoidance = ff_robot.obstacle_avoidance:main',
         ],
     },
 )

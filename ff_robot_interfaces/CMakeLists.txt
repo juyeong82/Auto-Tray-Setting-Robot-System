@@ -17,6 +17,7 @@ set(msg_files
 
 set(srv_files
   "srv/OrderService.srv"
+  "srv/OrderService2.srv"
   "srv/DetectObject.srv"
 )
 
