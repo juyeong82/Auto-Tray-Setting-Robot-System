@@ -190,14 +190,20 @@ class YoloVisionNode(Node):
                             })
 
         if candidates:
-            # [핵심 수정] X^2 + Y^2 거리 기준 정렬 (카메라 중심에서 가장 가까운 순서)
-            # 가장 가까운(값이 작은) 후보가 0번 인덱스로 옴
-            candidates.sort(key=lambda c: (c['x']**2 + c['y']**2))
+            # 12/03 10:35 수정됨: 타겟이 'tray'일 경우 먼 순서(reverse=True), 그 외에는 가까운 순서로 정렬하도록 로직 변경
+            # 트레이는 뒤쪽(먼 쪽)부터, 아이템은 앞쪽(가까운 쪽)부터 선택
+            is_tray = (target_name == 'tray')
+            candidates.sort(key=lambda c: (c['x']**2 + c['y']**2), reverse=is_tray)
             
             best = candidates[0]
             
             response.found = True
             response.position = Point(x=best['x'], y=best['y'], z=best['z'])
+            
+            # (로그 추가) 정렬 방식 확인용
+            sort_type = "먼 순서(Farthest)" if is_tray else "가까운 순서(Closest)"
+            self.get_logger().info(f"   🚩 정렬 기준: {sort_type} / 타겟: {target_name}")
+
             response.rx = 0.0
             response.ry = 180.0
             response.rz = best['rz']

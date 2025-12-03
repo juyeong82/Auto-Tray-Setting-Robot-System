@@ -37,8 +37,8 @@ TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 TRAY_FLOOR_Z = -25.0  # ⬆️ 변경: 25.0 → -25.0
 SAFE_Z_FLOOR_LIMIT = 10.0
 
-APPROACH_HEIGHT = 100.0
-EXTRA_LIFT_HEIGHT = 50.0
+
+EXTRA_LIFT_HEIGHT = 150.0
 DROP_SAFETY_MARGIN = 10.0  # ⬆️ 변경: 30.0 → 10.0
 
 J_ITEM_OBSERVE = [-34.0, 33.0, 15.0, 0.0, 132.0, 144.0]
@@ -62,10 +62,11 @@ ITEM_HEIGHTS = {
     "coke":    125.0, "cider":   125.0
 }
 
-#햄버거에도 보정값을 추가해야 z축으로 이동한 후 xy로 이동함
-FIXED_PICK_Z = {
-    "coke": 84.5, "cider": 84.5, "burger1": 50.0, "burger2": 50.0, "burger3": 50.0, 
-}
+#햄버거에도 보정값을 추가해야 z축으로 이동한 후 xy로 이동함 -> 2 yolo에서는 쓰지 않기
+FIXED_PICK_Z = {}
+# {
+#     "coke": 92.0, "cider": 92.0, "burger1": 50.0, "burger2": 50.0, "burger3": 50.0, 
+# }
 
 SCALE_X_TARGETS = ['cider', 'coke', 'fries', 'nugget']
 SCALE_Y_TARGETS = ['burger1', 'burger2', 'burger3']
@@ -196,15 +197,36 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
 
     if target_z < SAFE_Z_FLOOR_LIMIT: target_z = SAFE_Z_FLOOR_LIMIT
 
-    pick_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
-    approach_pose = [target_x, target_y, target_z + APPROACH_HEIGHT, target_rx, target_ry, target_rz]
-    lift_pose = [target_x, target_y, target_z + APPROACH_HEIGHT + EXTRA_LIFT_HEIGHT, target_rx, target_ry, target_rz]
+    # =========================================================================
+    # [12/03 수정] EXTRA_LIFT_HEIGHT를 활용하여 진입/진출 높이를 동일하게 높임
+    # =========================================================================
     
-    if not safe_movel(approach_pose, "아이템 접근"): return False, None
+    # 1. 안전한 상공 높이 변수 정의 (Approach + Extra Lift)
+    # 이 높이는 무조건 물체보다 150mm(기본100+추가50) 이상 높으므로 충돌 회피 가능
+    high_z_pos = target_z + EXTRA_LIFT_HEIGHT
+
+    # 2. 좌표 정의
+    pick_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
+    
+    # [수정] 접근(approach)할 때도 high_z_pos를 사용하여 높게 진입
+    approach_pose = [target_x, target_y, high_z_pos, target_rx, target_ry, target_rz]
+    
+    # [수정] 복귀(lift)할 때도 동일한 high_z_pos 사용
+    lift_pose = [target_x, target_y, high_z_pos, target_rx, target_ry, target_rz]
+    
+    node_.get_logger().info(f"   🛡️ 고공 접근 설정: Z={high_z_pos:.1f} (Target Z={target_z:.1f})")
+    
+    # 3. 이동 시퀀스 수행
+    
+    # (1) 고공 접근 (대각선으로 오더라도 목적지 Z가 높아서 안전)
+    if not safe_movel(approach_pose, "아이템 고공 접근"): return False, None
+    
     if gripper_manager: gripper_manager.prepare_grip(item_name)
+    
+    # (2) 수직 하강
     if not safe_movel(pick_pose, "아이템 하강"): return False, None
     
-    # 그리퍼 동작 (에러 무시)
+    # (3) 그리퍼 동작
     if gripper_manager:
         try:
             gripper_manager.execute_grip(item_name)
@@ -218,17 +240,11 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
             except Exception as e:
                 node_.get_logger().warn(f"⚠️ Gripper close failed (continuing): {e}")
     
-    # 12/02/18:36 수정됨: 햄버거 집고 위로 상승했다가 이동하는 모션 추가
-    vertical_lift_pose = [
-        target_x, target_y,
-        target_z + APPROACH_HEIGHT + EXTRA_LIFT_HEIGHT,
-        target_rx, target_ry, target_rz
-        ]
-
+    # (4) 수직 상승 (아까 진입했던 높은 높이로 복귀)
     if not safe_movel(lift_pose, "아이템 상승(High)"): return False, None
     
-    # 12/02/18:36 수정됨: 햄버거 집고 위로 상승했다가 이동하는 모션 추가
-    return True, vertical_lift_pose[2]
+    # 배치(Place) 단계로 넘어갈 때도 이 높은 Z값을 유지하며 이동하도록 리턴값 전달
+    return True, high_z_pos
 
 def call_vision_service(target_name):
     if vision_cli is None or not vision_cli.service_is_ready():
@@ -253,7 +269,7 @@ def call_vision_service(target_name):
     return None
 
 # ==============================================================================
-# SERVICE HANDLER: /place_item
+# SERVICE HANDLER: /place_item (2-Stage Vision + Top-Down Check)
 # ==============================================================================
 def handle_place_item(request, response):
     from DSR_ROBOT2 import get_current_posx
@@ -263,121 +279,144 @@ def handle_place_item(request, response):
     item_index = request.item_index
     total_items = request.total_items
     
-    node_.get_logger().info(f"🔧 [PlaceItem] 요청: '{item_name}' → Slot {target_slot_id} (#{item_index}/{total_items})")
+    node_.get_logger().info(f"🔧 [PlaceItem] 요청: '{item_name}' (2-Stage Vision)")
     
-    # 1. 관찰 자세로 이동
+    # ---------------------------------------------------------
+    # [Step 1] 1차 관측 (멀리서 대략적 위치 파악)
+    # ---------------------------------------------------------
     if not safe_movej(J_ITEM_OBSERVE):
-        response.success = False
-        response.message = "Failed to move to observation pose"
+        response.success = False; response.message = "Failed to move to observation pose"
         return response
     
-    time.sleep(1.0)
+    time.sleep(1.0) # 이미지 안정화
     
-    # 2. 레퍼런스 좌표 획득
-    try:
-        curr_pos = get_current_posx()
-        if isinstance(curr_pos, tuple): curr_pos = curr_pos[0]
-        ref_x_pos, ref_y_pos = curr_pos[0], curr_pos[1]
-    except:
-        ref_x_pos, ref_y_pos = 0.0, 0.0
+    # 비전 호출 (1차)
+    item_data_1 = call_vision_service(item_name)
+    if not item_data_1:
+        response.success = False; response.message = f"1st Vision failed: '{item_name}'"
+        return response
     
-    # 3. 그리퍼 준비
+    base_xyz_1 = transform_camera_to_base(item_data_1["position"])
+    if base_xyz_1 is None:
+        response.success = False; response.message = "1st Coord transform failed"
+        return response
+
+    # ---------------------------------------------------------
+    # [Step 2] 정밀 관측을 위한 상공 이동 (Top-Down 접근)
+    # ---------------------------------------------------------
+    # 대각선 뷰에서 얻은 X, Y 좌표의 수직 상공으로 이동
+    RE_CHECK_Z = 250.0  # 재확인 높이 (mm) - 충분히 높은 안전 고도
+    
+    # 수직 아래를 보기 위해 Rx=0, Ry=180, Rz=0 설정
+    # (1차 인식된 X, Y 좌표 사용)
+    pre_approach_pose = [base_xyz_1[0], base_xyz_1[1], RE_CHECK_Z, 0.0, 180.0, 0.0]
+    
+    # [중요] X, Y 먼저 이동하고 높이 맞춤 (직선 이동)
+    if not safe_movel(pre_approach_pose, "정밀 관측 위치 이동"):
+        response.success = False; response.message = "Failed to move to re-check pose"
+        return response
+        
+    time.sleep(0.5) # 이동 후 진동 안정화
+
+    # ---------------------------------------------------------
+    # [Step 3] 2차 관측 (정밀 보정)
+    # ---------------------------------------------------------
+    item_data_2 = call_vision_service(item_name)
+    
+    final_x, final_y, final_z, final_rz = 0.0, 0.0, 0.0, 0.0
+    
+    if item_data_2:
+        # 2차 인식 성공 시: 보정된 좌표 사용
+        base_xyz_2 = transform_camera_to_base(item_data_2["position"])
+        if base_xyz_2 is not None:
+            final_x = base_xyz_2[0]
+            final_y = base_xyz_2[1]
+            final_z = base_xyz_2[2] # 비전 뎁스값 사용
+            final_rz = item_data_2["rotation"][2] # Degree 단위
+            node_.get_logger().info(f"   🎯 2차 보정 완료: Z값 {base_xyz_1[2]:.1f} -> {final_z:.1f}")
+        else:
+            final_x, final_y, final_z = base_xyz_1
+            final_rz = item_data_1["rotation"][2]
+    else:
+        node_.get_logger().warn("   ⚠️ 2차 인식 실패 -> 1차 좌표 사용")
+        final_x, final_y, final_z = base_xyz_1
+        final_rz = item_data_1["rotation"][2]
+
+    # [Z값 안전장치] 바닥 충돌 방지
+    if final_z < SAFE_Z_FLOOR_LIMIT: 
+        final_z = SAFE_Z_FLOOR_LIMIT
+
+    # ---------------------------------------------------------
+    # [Step 4] 아이템 집기 (보정된 좌표 사용)
+    # ---------------------------------------------------------
     if gripper_manager: gripper_manager.prepare_grip(item_name)
     
-    # 4. 비전 호출
-    item_data = call_vision_service(item_name)
-    if not item_data:
-        response.success = False
-        response.message = f"Vision failed to detect '{item_name}'"
+    # 집을 때(Pick) 각도: 물체 각도(final_rz) 그대로 사용
+    pick_rz = final_rz 
+    full_pose = [final_x, final_y, final_z, 0, 0, pick_rz]
+    
+    # 현재 위치(상공)를 레퍼런스로 사용
+    curr_pos = pre_approach_pose
+    ref_x_pos, ref_y_pos = curr_pos[0], curr_pos[1]
+    
+    # safe_move_and_pick_item 호출
+    # (주의: FIXED_PICK_Z가 켜져 있으면 final_z가 무시됩니다.)
+    success, lifted_z = safe_move_and_pick_item(full_pose, item_name, ref_x_pos, ref_y_pos, pick_rz)
+    
+    if not success:
+        response.success = False; response.message = "Failed to pick item"
         return response
-    
-    # 5. 좌표 변환
-    base_xyz = transform_camera_to_base(item_data["position"])
-    if base_xyz is None:
-        response.success = False
-        response.message = "Coordinate transformation failed"
-        return response
-    
-    rz_obb = item_data["rotation"][2]
-    full_pose = [base_xyz[0], base_xyz[1], base_xyz[2], 0, 0, rz_obb]
-    
-    # 6. 아이템 집기
-    safe_movej(J_ITEM_CHECKPOINT)
-    success, lifted_z = safe_move_and_pick_item(full_pose, item_name, ref_x_pos, ref_y_pos, rz_obb)
-    if not success or lifted_z is None:
-        response.success = False
-        response.message = "Failed to pick item"
-        return response
-    
-    # 7. 트레이 배치 좌표 계산
+
+    # ---------------------------------------------------------
+    # [Step 5] 트레이 배치 (여기가 핵심)
+    # ---------------------------------------------------------
     center_tray_pos = get_tray_center_pose(target_slot_id)
-    center_tray_pos[1]+=10
+    center_tray_pos[1] += 10 # 약간의 Y 오프셋 (기존 코드 유지)
     grid_pos = slot_manager.get_tray_place_pose(center_tray_pos, item_index, total_items)
     
-    # 12/02/18:36 수정됨: 햄버거 집고 위로 상승했다가 이동하는 모션 추가
-    # ================================
-    # 🔥 NEW: XY 이동만 먼저 수행 (높이 유지)
-    # ================================
-    xy_move_pose = [
-        grid_pos[0], grid_pos[1], lifted_z,
-        grid_pos[3], grid_pos[4], grid_pos[5]
-    ]
-
-    if not safe_movel(xy_move_pose, "트레이 XY 접근"):
-        response.success = False
-        response.message = "Failed XY approach"
+    # =========================================================
+    # [수정] 트레이 배치 시 그리퍼 90도 회전 (Degree 단위)
+    # =========================================================
+    # ㅡ자(가로) -> ㅣ자(세로)로 회전하여 배치하여 충돌 방지
+    grid_pos[5] += 90.0 
+    # =========================================================
+    
+    # 상공 이동 (배치하러 가기) - 회전하면서 이동함
+    approach_place = list(grid_pos)
+    approach_place[2] = lifted_z # 아까 집고 올라온 높은 Z 유지
+    
+    if not safe_movel(approach_place, "배치 상공 접근"):
+        response.success = False; response.message = "Failed approach"
         return response
     
-    # ================================
-    # 🔥 NEW: 트레이 상공에서 Z 하강
-    # ================================
-    item_h = ITEM_HEIGHTS.get(item_name, 30.0)
-    final_z = TRAY_FLOOR_Z + item_h + DROP_SAFETY_MARGIN
-
-    drop_pose = [
-        grid_pos[0], grid_pos[1], final_z,
-        grid_pos[3], grid_pos[4], grid_pos[5]
-    ]
-
+    # 하강 및 놓기 (이미 회전된 상태)
+    item_h = ITEM_HEIGHTS.get(item_name, 30.0) 
+    final_place_z = TRAY_FLOOR_Z + item_h + DROP_SAFETY_MARGIN
+    drop_pose = list(approach_place)
+    drop_pose[2] = final_place_z
+    
     if not safe_movel(drop_pose, "배치 하강"):
-        response.success = False
-        response.message = "Failed to descend"
+        response.success = False; response.message = "Failed descend"
         return response
-
-    # 6) 그리퍼 open (놓기)
-    try:
-        if gripper_manager:
-            gripper_manager.release(item_name)
-        else:
-            gripper.open_gripper()
-            time.sleep(0.5)
-    except Exception as e:
-        node_.get_logger().warn(f"Gripper release failed: {e}")
-
-    # =========================================================================
-    # 12/02/19:25 수정됨: 물체 놓고 나서 안전하게 상공으로 복귀 (충돌 방지)
-    # =========================================================================
-    depart_pose = list(drop_pose)
-    depart_pose[2] = lifted_z  # 아까 타고 왔던 높은 Z축 위치로 복귀
     
-    if not safe_movel(depart_pose, "배치 후 상승"):
-        response.success = False
-        response.message = "Failed to depart"
-        return response
-
-    # ⭐ 성공 출력
+    # 그리퍼 열기
+    if gripper_manager: gripper_manager.release(item_name)
+    else: 
+        if gripper: gripper.open_gripper(); time.sleep(0.5)
+        
+    # 복귀
+    depart_pose = list(drop_pose)
+    depart_pose[2] = lifted_z
+    safe_movel(depart_pose, "배치 후 상승")
+    
     response.success = True
-    response.message = "Item placed"
-
-    # ⭐ 성공 출력
-    response.success = True
-    response.message = "Item placed"
+    response.message = "Success (2-Stage Vision)"
     response.actual_x = drop_pose[0]
     response.actual_y = drop_pose[1]
     response.actual_z = drop_pose[2]
-
-    node_.get_logger().info(f"→ '{item_name}' 배치 완료: {drop_pose}")
-
+    
+    node_.get_logger().info(f"   ✅ '{item_name}' 배치 완료 (Top-Down 방식)")
+    
     return response
     
     
