@@ -1,0 +1,644 @@
+#!/usr/bin/env python3
+# order_orchestrator.py (Updated from robot_controller_node.py)
+# 주문 관리, 트레이 픽업/서빙, 전체 워크플로우 조율
+# [Updated] 
+# 1. ENABLE_STARTUP_PLACEMENT 추가
+# 2. 충돌 회피 경로 추가 (J_AVOID_PATH_1, J_AVOID_PATH_2)
+# 3. 설정값 업데이트 (TRAY_FLOOR_Z, SERVING_PUSH_DISTANCE 등)
+
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+import threading
+import time
+import numpy as np
+import os
+import sys
+from scipy.spatial.transform import Rotation as R
+import math
+
+import DR_init
+from ff_robot_interfaces.srv import OrderService, DetectObject, PlaceItem
+from ff_robot.order_logic import SlotManager
+from ff_robot.tray_manager import TrayManager
+
+sys.stdout.reconfigure(line_buffering=True)
+
+# ==============================================================================
+# 🎛️ CONFIGURATION
+# ==============================================================================
+
+GLOBAL_OFFSET_X = 0.0
+GLOBAL_OFFSET_Y = 0.0
+GLOBAL_OFFSET_Z = -60.0
+
+TRAY_PICK_X_OFFSET = 50.0
+TRAY_PICK_Z_OFFSET = 0.0
+
+# 12/02/18:12 수정됨: 트레이 보충 시 집는 높이가 높아 값을 낮춤 (25.0 -> 15.0)
+# 필요에 따라 20.0 ~ 23.0 사이로 조절하세요.
+TRAY_PICK_HEIGHT_Z = 15.0
+
+SERVING_PICK_OFFSET_Y = 120.0
+SERVING_PICK_Z_OFFSET = 12.0  # ⬆️ 변경: -12.0 → 12.0
+SERVING_GRIP_RZ = 180.0
+
+SERVING_PUSH_DISTANCE = 300.0  # ⬆️ 변경: 150.0 → 250.0
+
+# 12/02/18:35 수정됨: 서빙 시 충돌 방지를 위해 그리퍼를 조금만(30mm) 열도록 설정 (단위: 1/10mm)
+SERVING_OPEN_WIDTH = 300
+
+TRAY_CENTER_OFFSET_X = 80.0
+TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
+TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
+
+TRAY_FLOOR_Z = -5.0  # ⬆️ 변경: 25.0 → -25.0
+SAFE_Z_FLOOR_LIMIT = 10.0
+
+APPROACH_HEIGHT = 100.0
+EXTRA_LIFT_HEIGHT = 50.0
+
+# [Joint Positions]
+J_TRAY_OBSERVE = [0.0, 30.0, 25.0, 0.0, 110.0, 0.0]
+# J_ITEM_OBSERVE = [-34.0, 33.0, 15.0, 0.0, 132.0, 144.0]
+J_ITEM_OBSERVE = [-33.197, 21.512, 35.707, -0.118, 122.787, 144.296]
+
+# ⭐ [NEW] 충돌 회피 경로 - Slot 0 보충용
+J_AVOID_PATH_1 = [4.50, 15.38, 50.94, -0.30, 90.49, 1.31]
+J_AVOID_PATH_2 = [1.44, -30.59, 91.91, -0.40, 99.27, 1.31]
+
+
+ROBOT_ID = "dsr01"
+ROBOT_MODEL = "m0609"
+DR_init.__dsr__id = ROBOT_ID
+DR_init.__dsr__model = ROBOT_MODEL
+
+node_ = None
+dsr_control_node_ = None
+manager = None
+tray_manager = None
+vision_cli = None
+place_item_cli = None
+gripper = None
+
+def get_tray_center_pose(slot_id):
+    edge_pos = TRAY_0_EDGE_POS if slot_id == 0 else TRAY_1_EDGE_POS
+    center_pos = list(edge_pos)
+    center_pos[0] += TRAY_CENTER_OFFSET_X
+    center_pos[3] = 0.0
+    center_pos[4] = 180.0
+    center_pos[5] = 0.0
+    return center_pos
+
+try:
+    from ff_robot.onrobot import RG
+except ImportError:
+    class RG:
+        def __init__(self, *args): pass
+        def open_gripper(self): print("   👐 [Virtual] Open")
+        def close_gripper(self, force=None): print("   ✊ [Virtual] Close")
+
+def get_robot_pose_matrix(posx_list):
+    x, y, z, rx, ry, rz = posx_list
+    rot = R.from_euler("ZYZ", [rx, ry, rz], degrees=True).as_matrix()
+    T = np.eye(4)
+    T[:3, :3] = rot
+    T[:3, 3] = [x, y, z]
+    return T
+
+def transform_camera_to_base(cam_xyz):
+    from DSR_ROBOT2 import get_current_posx
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        npy_path = os.path.join(current_dir, "T_gripper2camera.npy")
+        if os.path.exists(npy_path):
+            T_GRIPPER_TO_CAM = np.load(npy_path)
+        else:
+            return None
+            
+        curr_posx = get_current_posx()
+        if curr_posx is None: return None
+        if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
+        T_base_gripper = get_robot_pose_matrix(curr_posx)
+        T_base_cam = T_base_gripper @ T_GRIPPER_TO_CAM
+        p_cam = np.array([cam_xyz[0]*1000, cam_xyz[1]*1000, cam_xyz[2]*1000, 1.0])
+        p_base = T_base_cam @ p_cam
+        return p_base[:3]
+    except Exception as e:
+        return None
+
+# def wait_for_motion():
+#     from DSR_ROBOT2 import check_motion
+#     time.sleep(0.1)
+#     while check_motion() != 0:
+#         time.sleep(0.05)
+#         if not rclpy.ok(): return False
+#     return True
+
+def wait_for_motion():
+    # 1. Import를 try-except로 감싸서 안전하게 처리
+    try:
+        from DSR_ROBOT2 import check_motion, get_tool_force, move_pause, move_resume
+        # DR_BASE는 보통 0입니다. Import 실패 시 0으로 대체
+        try:
+            from DSR_ROBOT2 import DR_BASE
+        except ImportError:
+            DR_BASE = 0 
+    except ImportError as e:
+        node_.get_logger().error(f"🚨 DSR_ROBOT2 Import Error: {e}")
+        return True # 임포트 실패 시 감시 없이 동작만 수행하도록 True 반환 (동작 중단 방지)
+
+    # -- Force Settings --
+    FORCE_THRESHOLD = 15.0  
+    RESET_THRESHOLD = 5.0   
+    
+    is_paused = False
+    trigger_lock = False
+
+    time.sleep(0.1) # 모션 시작 대기
+    
+    # [Loop] 
+    while check_motion() != 0 or is_paused:
+        # 1. 외력 감지 (안전 장치 추가)
+        try:
+            f = get_tool_force(DR_BASE) 
+            # f가 None이거나 비어있을 경우 대비
+            if f is not None:
+                f_mag = math.sqrt(f[0]**2 + f[1]**2 + f[2]**2)
+            else:
+                f_mag = 0.0
+        except Exception as e:
+            # 외력 감지 실패해도 루프는 돌게 함 (로그만 1번 찍고 무시 가능)
+            f_mag = 0.0
+
+        # 2. 외력에 따른 Pause/Resume 로직
+        if f_mag > FORCE_THRESHOLD:
+            if not trigger_lock:
+                if not is_paused:
+                    node_.get_logger().warn(f"🛑 Force Detected ({f_mag:.1f}N) -> PAUSE")
+                    move_pause()
+                    is_paused = True
+                else:
+                    node_.get_logger().info(f"▶️ Force Detected ({f_mag:.1f}N) -> RESUME")
+                    move_resume()
+                    is_paused = False
+                trigger_lock = True
+        
+        elif f_mag < RESET_THRESHOLD:
+            trigger_lock = False
+
+        if is_paused:
+            time.sleep(0.1)
+            if not rclpy.ok(): return False
+            continue 
+
+        if check_motion() == 0:
+            break
+            
+        time.sleep(0.05)
+        if not rclpy.ok(): return False
+        
+    return True
+
+def safe_movej(joints):
+    from DSR_ROBOT2 import amovej
+    try:
+        time.sleep(0.05)
+        amovej(joints, vel=50.0, acc=50.0)
+        
+        # wait_for_motion 실행 결과 확인
+        if not wait_for_motion(): 
+            node_.get_logger().error("⚠️ wait_for_motion returned False during safe_movej")
+            return False
+            
+        time.sleep(0.05)
+        return True
+    except Exception as e:
+        # ⭐⭐⭐ 여기에 에러 내용을 출력하도록 수정 ⭐⭐⭐
+        node_.get_logger().error(f"🔥 safe_movej Exception: {e}")
+        return False
+
+def safe_movel(pos, desc="이동"):
+    from DSR_ROBOT2 import amovel, DR_BASE, DR_MV_MOD_ABS
+    try:
+        node_.get_logger().info(f"      → {desc} 시작: ...")
+        time.sleep(0.05)
+        amovel(pos, vel=[100.0, 100.0], acc=[100.0, 100.0], ref=DR_BASE, mod=DR_MV_MOD_ABS)
+        
+        if not wait_for_motion(): 
+            node_.get_logger().error(f"⚠️ wait_for_motion returned False during {desc}")
+            return False
+            
+        time.sleep(0.05)
+        node_.get_logger().info(f"      ✓ {desc} 완료")
+        return True
+    except Exception as e:
+        # ⭐⭐⭐ 에러 내용 출력 ⭐⭐⭐
+        node_.get_logger().error(f"   ❌ [{desc}] 오류 (Exception): {e}")
+        return False
+
+# ==============================================================================
+# [Action] 트레이 집기 (옆구리 잡기 -X -> EDGE_POS로 배치)
+# ==============================================================================
+def pick_and_place_tray(detected_data, slot_id):
+    global tray_manager, gripper
+    
+    node_.get_logger().info(f"   [Step 1/8] 좌표 변환 시작")
+    cam_pos = detected_data["position"]
+    base_pos = transform_camera_to_base(cam_pos)
+    rotation_rz = detected_data["rotation"][2]
+    
+    if base_pos is None:
+        node_.get_logger().error(f"   ❌ 좌표 변환 실패")
+        return False
+
+    node_.get_logger().info(f"   [Step 2/8] 집기 좌표 계산")
+    grip_pose = tray_manager.calculate_tray_grip_point(base_pos, rotation_rz)
+    grip_pose[0] += TRAY_PICK_X_OFFSET
+    
+    # Z축 강제 고정
+    grip_pose[2] = TRAY_PICK_HEIGHT_Z + TRAY_PICK_Z_OFFSET
+    
+    node_.get_logger().info(f"   🍱 Tray Side Grip Pose: {grip_pose}")
+    
+    approach_pose = grip_pose[:]
+    approach_pose[2] += APPROACH_HEIGHT
+    
+    node_.get_logger().info(f"   [Step 3/8] 그리퍼 열기")
+    # if gripper:
+    #     try:
+    #         gripper.open_gripper()
+    #     except Exception as e:
+    #         node_.get_logger().warn(f"⚠️ Gripper open failed (continuing): {e}")
+    
+    # 
+    if gripper:
+        try:
+            gripper.move_gripper(SERVING_OPEN_WIDTH)
+            time.sleep(0.5)
+        except Exception as e:
+            node_.get_logger().warn(f"⚠️ Gripper move failed (continuing): {e}")
+    
+    node_.get_logger().info(f"   [Step 4/8] 접근 위치로 이동")
+    if not safe_movel(approach_pose, "트레이 접근(상공)"):
+        node_.get_logger().error(f"   ❌ 접근 실패")
+        return False
+        
+    node_.get_logger().info(f"   [Step 5/8] 하강")
+    if not safe_movel(grip_pose, "트레이 잡기 위치 하강"):
+        node_.get_logger().error(f"   ❌ 하강 실패")
+        return False
+    
+    node_.get_logger().info(f"   [Step 6/8] 그리퍼 닫기")
+    if gripper:
+        try:
+            gripper.close_gripper()
+            time.sleep(1.0)
+        except Exception as e:
+            node_.get_logger().warn(f"⚠️ Gripper close failed (continuing): {e}")
+    
+    node_.get_logger().info(f"   [Step 7/8] 들어올리기 (250mm)")
+    lift_pose = grip_pose[:]
+    lift_pose[2] = 250.0
+    if not safe_movel(lift_pose, "트레이 높게 들기"):
+        node_.get_logger().error(f"   ❌ 들기 실패")
+        return False
+
+    # ⭐ [NEW] 충돌 회피 경로 - Slot 0 보충 시
+    node_.get_logger().info(f"   [Step 8/8] 배치 위치로 이동 (Slot {slot_id})")
+    if slot_id == 0:
+        node_.get_logger().info("🚧 [Slot 0] 충돌 방지 우회 경로 실행 (Slot 1 회피)")
+        if not safe_movej(J_AVOID_PATH_1):
+            node_.get_logger().error(f"   ❌ 회피경로1 실패")
+            return False
+        if not safe_movej(J_AVOID_PATH_2):
+            node_.get_logger().error(f"   ❌ 회피경로2 실패")
+            return False
+    
+    target_pos = TRAY_0_EDGE_POS if slot_id == 0 else TRAY_1_EDGE_POS
+    
+    place_pose = list(target_pos)
+    place_pose[3] = grip_pose[3]
+    place_pose[4] = grip_pose[4]
+    place_pose[5] = grip_pose[5]
+    
+    air_pose = place_pose[:]
+    air_pose[2] = 250.0
+    
+    node_.get_logger().info(f"   [Step 8a] 공중 이동")
+    if not safe_movel(air_pose, "트레이 공중 이동"):
+        node_.get_logger().error(f"   ❌ 공중 이동 실패")
+        return False
+        
+    node_.get_logger().info(f"   [Step 8b] 배치 하강")
+    if not safe_movel(place_pose, "트레이 배치 하강"):
+        node_.get_logger().error(f"   ❌ 배치 하강 실패")
+        return False
+    
+    node_.get_logger().info(f"   [Complete] 그리퍼 열고 복귀")
+    if gripper:
+        try:
+            gripper.open_gripper()
+            time.sleep(0.5)
+        except Exception as e:
+            node_.get_logger().warn(f"⚠️ Gripper open failed (continuing): {e}")
+    
+    depart_pose = place_pose[:]
+    depart_pose[2] += APPROACH_HEIGHT
+    if not safe_movel(depart_pose, "작업 완료 상승"):
+        node_.get_logger().error(f"   ❌ 복귀 실패")
+        return False
+    
+    node_.get_logger().info(f"   ✅✅✅ 트레이 픽업 완료! ✅✅✅")
+    return True
+
+
+# ==============================================================================
+# [Action] 서빙 (뒤에서 밀기 - Pushing Motion) - 555 : 12.03 서빙 완료 후 모션 수정
+# ==============================================================================
+def serve_tray(slot_id):
+    global tray_manager, gripper, SERVING_PUSH_DISTANCE, APPROACH_HEIGHT
+    
+    # 1. 트레이 배치 위치(작업대 위)의 중심 좌표를 가져옵니다.
+    center_pos = get_tray_center_pose(slot_id)
+    
+    # 2. 푸시 시작점 계산 (트레이 뒤쪽 경계)
+    # 트레이의 Y축 길이를 고려하여 중심보다 뒤쪽으로 150mm 이동 (트레이 뒤를 넘어가야 함)
+    # (SERVING_PICK_OFFSET_Y 대신 트레이의 후방 끝 지점을 가정합니다.)
+    
+    # if gripper:
+    #     try:
+    #         node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
+    #         # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
+    #         gripper.close_gripper_gripper() 
+    #         time.sleep(0.5) 
+    #     except Exception as e:
+    #         node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
+    
+    # 트레이가 작업대 중앙에 배치되어 있다고 가정하고, 뒤쪽으로 50mm 더 가서 접촉점을 만듭니다.
+    push_start_offset_y = 150.0 
+    push_contact_pos = list(center_pos)
+    push_contact_pos[1] -= push_start_offset_y # Y축 마이너스 방향으로 이동 (뒤쪽)
+    push_contact_pos[5] = SERVING_GRIP_RZ
+    
+    # 3. 그리퍼 닫기 (그리퍼 밑판을 푸시 툴로 사용)
+    if gripper:
+        try:
+            node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
+            # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
+            gripper.open_gripper_gripper() 
+            time.sleep(0.5) 
+        except Exception as e:
+            node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
+            
+    # 4. 접근 위치 (상공)
+    approach_push = list(push_contact_pos)
+    approach_push[2] += APPROACH_HEIGHT # 안전한 높이로 접근
+    if not safe_movel(approach_push, "서빙 (뒤) 상공 접근"): return False
+
+    # 5. 푸시 높이로 하강 (트레이 높이 + 바닥 Z 값)
+    # TRAY_FLOOR_Z = -25.0 이고 트레이 높이가 15mm 정도라고 가정할 때,
+    push_height = TRAY_FLOOR_Z 
+    push_pose = list(push_contact_pos)
+    push_pose[2] = push_height
+    
+    if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
+
+    # 6. ⭐⭐⭐ 푸시 실행 (Y축 정방향으로 SERVING_PUSH_DISTANCE만큼 밀기) ⭐⭐⭐
+    final_push_pose = list(push_pose)
+    final_push_pose[1] += SERVING_PUSH_DISTANCE # Y축 플러스 방향(고객 방향)으로 이동
+    
+    node_.get_logger().info(f"   🚀 서빙 밀기 시작 (+Y {SERVING_PUSH_DISTANCE}mm)")
+    
+    if not safe_movel(final_push_pose, "트레이 밀기 동작"): return False
+
+    # 7. 안전하게 상승하여 복귀
+    depart_pose = list(final_push_pose)
+    depart_pose[2] += APPROACH_HEIGHT
+    
+    if not safe_movel(depart_pose, "서빙 완료 후 상승"): return False
+    
+    node_.get_logger().info(f"   ✅ 서빙 완료!")
+    
+    return True
+
+
+# ⭐ [NEW] 트레이 보충 함수
+def ensure_tray_in_slot(slot_id):
+    """특정 슬롯이 비어있으면 트레이를 가져다 놓음"""
+    node_.get_logger().info(f"🔎 [Tray Refill] Slot {slot_id} 보충 시작")
+    safe_movej(J_TRAY_OBSERVE)
+    time.sleep(1.0)
+    
+    tray_data = call_vision_service("tray")
+    if tray_data:
+        if pick_and_place_tray(tray_data, slot_id):
+            tray_manager.update_tray_status(slot_id, "working")
+            node_.get_logger().info(f"✅ Slot {slot_id} 트레이 보충 완료")
+            return True
+    
+    node_.get_logger().warn(f"⚠️ Slot {slot_id} 트레이 보충 실패")
+    return False
+
+def call_vision_service(target_name):
+    if vision_cli is None or not vision_cli.service_is_ready():
+        return None
+    req = DetectObject.Request()
+    req.target_object_id = target_name
+    future = vision_cli.call_async(req)
+    
+    start = time.time()
+    while not future.done():
+        if time.time() - start > 5.0: return None
+        time.sleep(0.1)
+    try:
+        res = future.result()
+        if res.found:
+            return {
+                "position": [res.position.x, res.position.y, res.position.z],
+                "rotation": [res.rx, res.ry, res.rz],
+                "confidence": res.confidence
+            }
+    except: pass
+    return None
+
+def call_place_item_service(item_name, target_slot_id, item_index, total_items):
+    if place_item_cli is None or not place_item_cli.service_is_ready():
+        node_.get_logger().error("❌ PlaceItem service not available")
+        return False
+    
+    req = PlaceItem.Request()
+    req.item_name = item_name
+    req.target_slot_id = target_slot_id
+    req.item_index = item_index
+    req.total_items = total_items
+    
+    future = place_item_cli.call_async(req)
+    
+    start = time.time()
+    while not future.done():
+        if time.time() - start > 60.0:
+            node_.get_logger().error("❌ PlaceItem service timeout")
+            return False
+        time.sleep(0.1)
+    
+    try:
+        res = future.result()
+        if res.success:
+            node_.get_logger().info(f"   ✅ PlaceItem 성공: {res.message}")
+            return True
+        else:
+            node_.get_logger().error(f"   ❌ PlaceItem 실패: {res.message}")
+            return False
+    except Exception as e:
+        node_.get_logger().error(f"   ❌ PlaceItem 예외: {e}")
+        return False
+
+# ==============================================================================
+# MAIN TASK LOOP
+# ==============================================================================
+def perform_robot_task():
+    global manager, tray_manager, gripper
+    
+    try:
+        from DSR_ROBOT2 import movej, get_current_posx
+    except:
+        return
+
+    try:
+        gripper = RG("rg2", "192.168.1.1", "502")
+        node_.get_logger().info("✅ Real Gripper Initialized")
+    except:
+        gripper = RG()
+        node_.get_logger().info("⚠️ Virtual Gripper Initialized")
+
+    safe_movej(J_TRAY_OBSERVE)
+    
+    node_.get_logger().info("✅ 초기 상태 설정: 트레이 2개 세팅 완료 (Status -> Working)")
+    tray_manager.update_tray_status(0, "working")
+    tray_manager.update_tray_status(1, "working")
+    
+    safe_movej(J_ITEM_OBSERVE)
+    node_.get_logger().info("[Task] 초기화 완료. 주문 대기 중...")
+
+    while rclpy.ok():
+        try:
+            # Phase 1: 트레이 보충 (서빙 후 비어있으면)
+            for sid in [0, 1]:
+                if tray_manager.tray_states[sid]['status'] == 'empty':
+                    node_.get_logger().info(f"🔎 [Phase 1] 트레이 보충 (Slot {sid})")
+                    ensure_tray_in_slot(sid)
+
+            # Phase 2: 물품 배치
+            needed_items = manager.get_all_needed_items()
+            if needed_items:
+                target_item = needed_items[0]
+                
+                valid_target = False
+                for sid, data in manager.active_slots.items():
+                    if data and target_item in data['needed'] and \
+                       data['placed_total'].count(target_item) < data['needed'].count(target_item):
+                        if tray_manager.tray_states[sid]['status'] == 'working':
+                            valid_target = True
+                            break
+                
+                if valid_target:
+                    node_.get_logger().info(f"🔎 [Phase 2] 물품 탐색: '{target_item}'")
+                    
+                    target_slot = None
+                    for sid, data in manager.active_slots.items():
+                        if data and target_item in data['needed'] and \
+                           data['placed_total'].count(target_item) < data['needed'].count(target_item):
+                            target_slot = sid
+                            break
+                    
+                    if target_slot is not None:
+                        slot_data = manager.active_slots[target_slot]
+                        current_idx = len(slot_data['placed_total'])
+                        total_count = len(slot_data['needed'])
+                        
+                        if call_place_item_service(target_item, target_slot, current_idx, total_count):
+                            is_done = manager.mark_item_done(target_slot, target_item)
+                            if is_done:
+                                tray_manager.update_tray_status(target_slot, "ready")
+                else:
+                    time.sleep(0.5)
+
+            # Phase 3: 서빙
+            ready_slot = tray_manager.get_ready_slot()
+            if ready_slot is not None:
+                node_.get_logger().info(f"🍽️ [Phase 3] 서빙 시작 (Slot {ready_slot})")
+                if serve_tray(ready_slot):
+                    manager.clear_slot(ready_slot)
+                    tray_manager.update_tray_status(ready_slot, "empty")
+            
+            time.sleep(0.5)
+            
+        except Exception as e:
+            node_.get_logger().error(f"Task Error: {e}")
+            time.sleep(1.0)
+
+def handle_order_request(request, response):
+    success, msg = manager.check_and_deduct_stock(request.item_names, request.item_quantities)
+    if success:
+        manager.add_order_to_slot(f"ORD-{int(time.time())}", request.item_names, request.item_quantities)
+        response.assigned_order_id = f"ORD-{int(time.time())}"
+        response.message = "OK"
+    else:
+        response.assigned_order_id = ""
+        response.message = msg
+    return response
+
+def main(args=None):
+    global node_, dsr_control_node_, manager, tray_manager, vision_cli, place_item_cli
+    
+    rclpy.init(args=args)
+    
+    manager = SlotManager()
+    tray_manager = TrayManager()
+    
+    node_ = rclpy.create_node("order_orchestrator", namespace=ROBOT_ID)
+    dsr_control_node_ = rclpy.create_node("dsr_orchestrator_internal_node", namespace=ROBOT_ID)
+    DR_init.__dsr__node = dsr_control_node_
+    
+    node_.get_logger().info("=========================================")
+    node_.get_logger().info("🎯 Order Orchestrator Node (Updated)")
+    node_.get_logger().info("=========================================")
+    
+    cb_group = ReentrantCallbackGroup()
+    node_.create_service(OrderService, '/dsr01/order_service', handle_order_request, callback_group=cb_group)
+    vision_cli = node_.create_client(DetectObject, '/dsr01/detect_object', callback_group=cb_group)
+    place_item_cli = node_.create_client(PlaceItem, '/place_item', callback_group=cb_group)
+    
+    node_.get_logger().info("⏳ Waiting for services...")
+    
+    timeout_sec = 10.0
+    start_time = time.time()
+    while not place_item_cli.service_is_ready():
+        if time.time() - start_time > timeout_sec:
+            node_.get_logger().warn("⚠️ /place_item service not available (continuing anyway)")
+            break
+        time.sleep(0.1)
+    
+    if place_item_cli.service_is_ready():
+        node_.get_logger().info("✅ /place_item service connected")
+    
+    executor = MultiThreadedExecutor()
+    executor.add_node(node_)
+    
+    t_robot = threading.Thread(target=perform_robot_task, daemon=True)
+    t_robot.start()
+    
+    node_.get_logger().info("🚀 Main loop started")
+    
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
