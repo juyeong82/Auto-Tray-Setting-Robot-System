@@ -144,6 +144,7 @@ VOICE_PROMPT_TEMPLATE = """
    최종 주문 내역을 정리해주고 마지막 줄에 <데이터 추출 규칙>을 적용하세요.
 4. 아직 주문이 완료되지 않았다면 [ORDER: ...] 태그를 절대 붙이지 마세요.
 5. 손님에게는 태그를 제외한 친절한 한국어 멘트로만 대답하세요.
+6. 불필요한 말 하지말고, 최대한 빨리 단정하게 대답하세요.
 
 <데이터 추출 규칙>
 - 주문이 최종 확정되었을 때만, 답변 맨 마지막에 [ORDER: 메뉴코드1, 수량1, 메뉴코드2, 수량2, ...] 형식을 추가하고, 
@@ -688,8 +689,11 @@ class KioskWindow(QWidget):
         else: QMessageBox.warning(self, "실패", msg)
     def on_next_customer(self): self.reset_and_go_home()
 
-if __name__ == "__main__":
+def main(args=None):
     app = QApplication(sys.argv)
     win = KioskWindow()
     win.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()

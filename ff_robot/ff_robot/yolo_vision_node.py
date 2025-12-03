@@ -192,17 +192,22 @@ class YoloVisionNode(Node):
         if candidates:
             # 12/03 10:35 수정됨: 타겟이 'tray'일 경우 먼 순서(reverse=True), 그 외에는 가까운 순서로 정렬하도록 로직 변경
             # 트레이는 뒤쪽(먼 쪽)부터, 아이템은 앞쪽(가까운 쪽)부터 선택
-            is_tray = (target_name == 'tray')
-            candidates.sort(key=lambda c: (c['x']**2 + c['y']**2), reverse=is_tray)
+            
+            # candidates.sort(key=lambda c: (c['x']**2 + c['y']**2), reverse=is_tray)
+            
+            if target_name =='tray':
+                candidates.sort(key=lambda c: c['x'], reverse=True)
+                sort_type = 'x축 가장 먼 순서(Max x)'
+            else:
+                candidates.sort(key=lambda c: (c['x']**2 + c['y']**2))
+                sort_type = '가까운 순서(Closest)'
             
             best = candidates[0]
             
             response.found = True
             response.position = Point(x=best['x'], y=best['y'], z=best['z'])
             
-            # (로그 추가) 정렬 방식 확인용
-            sort_type = "먼 순서(Farthest)" if is_tray else "가까운 순서(Closest)"
-            self.get_logger().info(f"   🚩 정렬 기준: {sort_type} / 타겟: {target_name}")
+            
 
             response.rx = 0.0
             response.ry = 180.0
@@ -212,6 +217,8 @@ class YoloVisionNode(Node):
             response.confidence = best['conf']
             
             dist_sq = best['x']**2 + best['y']**2
+            
+            self.get_logger().info(f" 정렬 기준:{sort_type} | 타겟: {target_name}")
             self.get_logger().info(f"   ✅ 선택됨: X={best['x']:.1f}, Y={best['y']:.1f} (Dist^2={dist_sq:.0f})")
 
             # 디버깅 이미지

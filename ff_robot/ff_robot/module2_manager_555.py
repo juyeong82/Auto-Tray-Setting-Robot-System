@@ -42,13 +42,11 @@ TRAY_PICK_Z_OFFSET = 0.0
 # 필요에 따라 20.0 ~ 23.0 사이로 조절하세요.
 TRAY_PICK_HEIGHT_Z = 15.0
 
-# 원본
-# SERVING_PICK_OFFSET_Y = 120.0
-SERVING_PICK_OFFSET_Y = 150.0
+SERVING_PICK_OFFSET_Y = 120.0
 SERVING_PICK_Z_OFFSET = 12.0  # ⬆️ 변경: -12.0 → 12.0
 SERVING_GRIP_RZ = 180.0
 
-SERVING_PUSH_DISTANCE = 250.0  # ⬆️ 변경: 150.0 → 250.0
+SERVING_PUSH_DISTANCE = 300.0  # ⬆️ 변경: 150.0 → 250.0
 
 # 12/02/18:35 수정됨: 서빙 시 충돌 방지를 위해 그리퍼를 조금만(30mm) 열도록 설정 (단위: 1/10mm)
 SERVING_OPEN_WIDTH = 300
@@ -60,7 +58,7 @@ TRAY_CENTER_OFFSET_X = 80.0
 TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 
-TRAY_FLOOR_Z = -25.0  # ⬆️ 변경: 25.0 → -25.0
+TRAY_FLOOR_Z = -5.0  # ⬆️ 변경: 25.0 → -25.0
 SAFE_Z_FLOOR_LIMIT = 10.0
 
 APPROACH_HEIGHT = 100.0
@@ -68,7 +66,8 @@ EXTRA_LIFT_HEIGHT = 50.0
 
 # [Joint Positions]
 J_TRAY_OBSERVE = [0.0, 30.0, 25.0, 0.0, 110.0, 0.0]
-J_ITEM_OBSERVE = [-34.0, 33.0, 15.0, 0.0, 132.0, 144.0]
+# J_ITEM_OBSERVE = [-34.0, 33.0, 15.0, 0.0, 132.0, 144.0]
+J_ITEM_OBSERVE = [-33.197, 21.512, 35.707, -0.118, 122.787, 144.296]
 
 # ⭐ [NEW] 충돌 회피 경로 - Slot 0 보충용
 J_AVOID_PATH_1 = [4.50, 15.38, 50.94, -0.30, 90.49, 1.31]
@@ -193,11 +192,19 @@ def pick_and_place_tray(detected_data, slot_id):
     approach_pose[2] += APPROACH_HEIGHT
     
     node_.get_logger().info(f"   [Step 3/8] 그리퍼 열기")
+    # if gripper:
+    #     try:
+    #         gripper.open_gripper()
+    #     except Exception as e:
+    #         node_.get_logger().warn(f"⚠️ Gripper open failed (continuing): {e}")
+    
+    # 
     if gripper:
         try:
-            gripper.open_gripper()
+            gripper.move_gripper(SERVING_OPEN_WIDTH)
+            time.sleep(0.5)
         except Exception as e:
-            node_.get_logger().warn(f"⚠️ Gripper open failed (continuing): {e}")
+            node_.get_logger().warn(f"⚠️ Gripper move failed (continuing): {e}")
     
     node_.get_logger().info(f"   [Step 4/8] 접근 위치로 이동")
     if not safe_movel(approach_pose, "트레이 접근(상공)"):
@@ -272,80 +279,76 @@ def pick_and_place_tray(detected_data, slot_id):
     node_.get_logger().info(f"   ✅✅✅ 트레이 픽업 완료! ✅✅✅")
     return True
 
+
 # ==============================================================================
-# [Action] 서빙 (아래 잡고 밀기 -Y)
+# [Action] 서빙 (뒤에서 밀기 - Pushing Motion) - 555 : 12.03 서빙 완료 후 모션 수정
 # ==============================================================================
 def serve_tray(slot_id):
-    global tray_manager, gripper
+    global tray_manager, gripper, SERVING_PUSH_DISTANCE, APPROACH_HEIGHT
     
+    # 1. 트레이 배치 위치(작업대 위)의 중심 좌표를 가져옵니다.
     center_pos = get_tray_center_pose(slot_id)
     
-    # 아래쪽 잡기
-    grip_pose = list(center_pos)
-    grip_pose[1] -= SERVING_PICK_OFFSET_Y
-    grip_pose[2] = 0.0 # (절대값 고정)
-    grip_pose[5] = SERVING_GRIP_RZ
+    # 2. 푸시 시작점 계산 (트레이 뒤쪽 경계)
+    # 트레이의 Y축 길이를 고려하여 중심보다 뒤쪽으로 150mm 이동 (트레이 뒤를 넘어가야 함)
+    # (SERVING_PICK_OFFSET_Y 대신 트레이의 후방 끝 지점을 가정합니다.)
     
-    approach = list(grip_pose)
-    approach[2] += APPROACH_HEIGHT
-    
-    node_.get_logger().info(f"   🍽️ 서빙 시작 (Slot {slot_id}) - 좌표: {grip_pose[:3]}")
-    
-    # --------------------------------------------------------------------------
-    # 12/02/19:15 수정됨: 햄버거 충돌 방지를 위해 '상공 이동' -> '그리퍼 좁히기' 순서로 변경
-    # --------------------------------------------------------------------------
-
-    # 1. 먼저 안전한 상공(Approach)으로 이동 (기존 그리퍼 상태 유지 - 아마도 300mm보다 넓은 상태)
-    if not safe_movel(approach, "서빙 준비 접근"): return False
-
-    # 2. 상공에 도착한 뒤에 그리퍼 폭을 서빙용(30mm)으로 조절
     # if gripper:
     #     try:
-    #         node_.get_logger().info(f"   🤏 상공에서 그리퍼 폭 조절 ({SERVING_OPEN_WIDTH})")
-    #         gripper.move_gripper(SERVING_OPEN_WIDTH) 
-    #         time.sleep(0.5) # 동작 안정화 대기
+    #         node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
+    #         # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
+    #         gripper.close_gripper_gripper() 
+    #         time.sleep(0.5) 
     #     except Exception as e:
-    #         node_.get_logger().warn(f"⚠️ Gripper move failed (continuing): {e}")
+    #         node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
     
+    # 트레이가 작업대 중앙에 배치되어 있다고 가정하고, 뒤쪽으로 50mm 더 가서 접촉점을 만듭니다.
+    push_start_offset_y = 150.0 
+    push_contact_pos = list(center_pos)
+    push_contact_pos[1] -= push_start_offset_y # Y축 마이너스 방향으로 이동 (뒤쪽)
+    push_contact_pos[5] = SERVING_GRIP_RZ
+    
+    # 3. 그리퍼 닫기 (그리퍼 밑판을 푸시 툴로 사용)
     if gripper:
         try:
-            gripper.open_gripper()
+            node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
+            # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
+            gripper.open_gripper_gripper() 
+            time.sleep(0.5) 
         except Exception as e:
-            node_.get_logger().warn(f"⚠️ Gripper open failed (continuing): {e}")
+            node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
+            
+    # 4. 접근 위치 (상공)
+    approach_push = list(push_contact_pos)
+    approach_push[2] += APPROACH_HEIGHT # 안전한 높이로 접근
+    if not safe_movel(approach_push, "서빙 (뒤) 상공 접근"): return False
 
-    # 3. 그 다음 하강
-    if not safe_movel(grip_pose, "서빙 그립 하강"): return False
+    # 5. 푸시 높이로 하강 (트레이 높이 + 바닥 Z 값)
+    # TRAY_FLOOR_Z = -25.0 이고 트레이 높이가 15mm 정도라고 가정할 때,
+    push_height = TRAY_FLOOR_Z 
+    push_pose = list(push_contact_pos)
+    push_pose[2] = push_height
     
-    # 4. 꽉 잡기
-    # if gripper:
-    #     try:
-    #         gripper.close_gripper()
-    #         time.sleep(1.0)
-    #     except Exception as e:
-    #         node_.get_logger().warn(f"⚠️ Gripper close failed (continuing): {e}")
+    if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
+
+    # 6. ⭐⭐⭐ 푸시 실행 (Y축 정방향으로 SERVING_PUSH_DISTANCE만큼 밀기) ⭐⭐⭐
+    final_push_pose = list(push_pose)
+    final_push_pose[1] += SERVING_PUSH_DISTANCE # Y축 플러스 방향(고객 방향)으로 이동
     
-    # 밀기
-    push_pose = list(grip_pose)
-    push_pose[1] += SERVING_PUSH_DISTANCE
+    node_.get_logger().info(f"   🚀 서빙 밀기 시작 (+Y {SERVING_PUSH_DISTANCE}mm)")
     
-    node_.get_logger().info(f"   🚀 서빙 밀기 (+Y {SERVING_PUSH_DISTANCE}mm)")
+    if not safe_movel(final_push_pose, "트레이 밀기 동작"): return False
+
+    # 7. 안전하게 상승하여 복귀
+    depart_pose = list(final_push_pose)
+    depart_pose[2] += APPROACH_HEIGHT
     
-    if not safe_movel(push_pose, "서빙 밀기 동작"): return False
+    if not safe_movel(depart_pose, "서빙 완료 후 상승"): return False
     
-    # 놓고 빠질 때
-    if gripper:
-        try:
-            gripper.move_gripper(SERVING_OPEN_WIDTH)
-            time.sleep(0.5)
-        except Exception as e:
-            node_.get_logger().warn(f"⚠️ Gripper move failed (continuing): {e}")
-    
-    depart = list(push_pose)
-    depart[2] += APPROACH_HEIGHT
-    
-    if not safe_movel(depart, "서빙 완료 후 상승"): return False
+    node_.get_logger().info(f"   ✅ 서빙 완료!")
     
     return True
+
 
 # ⭐ [NEW] 트레이 보충 함수
 def ensure_tray_in_slot(slot_id):
