@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # yolo_vision_node.py
-# [Final Fix] 거리 기준 정렬 (Center Focus): X, Y 제곱합 기준 오름차순 정렬
 
 import rclpy
 from rclpy.node import Node

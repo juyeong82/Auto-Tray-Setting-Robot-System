@@ -122,21 +122,7 @@ class SlotManager:
                     final_list.append(item)
                     
         return final_list
-
-    def peek_target_slot(self, item_name):
-        """
-        아이템을 실제로 차감하지 않고, 이 아이템이 어느 슬롯으로 갈지 미리 확인
-        (트레이 위치 결정을 위해 사용)
-        """
-        active_orders = [(sid, data) for sid, data in self.active_slots.items() if data]
-        # 도착 시간 순 정렬
-        sorted_orders = sorted(active_orders, key=lambda x: x[1]['arrival_time'])
-
-        for sid, data in sorted_orders:
-            # 이 주문에 해당 아이템이 더 필요한가?
-            if data['placed_total'].count(item_name) < data['needed'].count(item_name):
-                return sid 
-        return 0 # 기본값
+    
 
     def get_tray_place_pose(self, tray_center_pose, current_idx, total_count):
         """

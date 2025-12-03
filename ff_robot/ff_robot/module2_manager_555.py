@@ -28,9 +28,6 @@ sys.stdout.reconfigure(line_buffering=True)
 # 🎛️ CONFIGURATION
 # ==============================================================================
 
-# [설정] 로봇 시작 시 자동으로 트레이를 배치할지 여부
-ENABLE_STARTUP_PLACEMENT = False
-
 GLOBAL_OFFSET_X = 0.0
 GLOBAL_OFFSET_Y = 0.0
 GLOBAL_OFFSET_Z = -60.0
@@ -51,9 +48,6 @@ SERVING_PUSH_DISTANCE = 300.0  # ⬆️ 변경: 150.0 → 250.0
 # 12/02/18:35 수정됨: 서빙 시 충돌 방지를 위해 그리퍼를 조금만(30mm) 열도록 설정 (단위: 1/10mm)
 SERVING_OPEN_WIDTH = 300
 
-TRAY_0_POS = [205.0, 20.0, 20.0, 43.35, -180.0, -134.82]
-TRAY_1_POS = [435.0, 20.0, 20.0, 43.35, -180.0, -134.82]
-
 TRAY_CENTER_OFFSET_X = 80.0
 TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
@@ -72,6 +66,7 @@ J_ITEM_OBSERVE = [-33.197, 21.512, 35.707, -0.118, 122.787, 144.296]
 # ⭐ [NEW] 충돌 회피 경로 - Slot 0 보충용
 J_AVOID_PATH_1 = [4.50, 15.38, 50.94, -0.30, 90.49, 1.31]
 J_AVOID_PATH_2 = [1.44, -30.59, 91.91, -0.40, 99.27, 1.31]
+
 
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
@@ -441,17 +436,9 @@ def perform_robot_task():
 
     safe_movej(J_TRAY_OBSERVE)
     
-    # ⭐ [NEW] 시작 시 트레이 배치 로직
-    if ENABLE_STARTUP_PLACEMENT:
-        node_.get_logger().info("🚀 로봇 시작: 초기 트레이 배치 작업 수행")
-        if tray_manager.tray_states[0]['status'] == 'empty':
-            ensure_tray_in_slot(0)
-        if tray_manager.tray_states[1]['status'] == 'empty':
-            ensure_tray_in_slot(1)
-    else:
-        node_.get_logger().info("🚧 로봇 시작: 초기 트레이 배치 건너뜀 -> 상태 'working' 강제 설정")
-        tray_manager.update_tray_status(0, "working")
-        tray_manager.update_tray_status(1, "working")
+    node_.get_logger().info("✅ 초기 상태 설정: 트레이 2개 세팅 완료 (Status -> Working)")
+    tray_manager.update_tray_status(0, "working")
+    tray_manager.update_tray_status(1, "working")
     
     safe_movej(J_ITEM_OBSERVE)
     node_.get_logger().info("[Task] 초기화 완료. 주문 대기 중...")
