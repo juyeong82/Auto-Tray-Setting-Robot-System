@@ -23,6 +23,11 @@ from ff_robot_interfaces.srv import OrderService, DetectObject, PlaceItem
 from ff_robot.order_logic import SlotManager
 from ff_robot.tray_manager import TrayManager
 
+# ========== 기존 추가한 부분을 아래로 교체 ==========
+from std_msgs.msg import Float64MultiArray
+from dsr_msgs2.srv import MovePause, MoveResume
+# =================================================
+
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
@@ -74,6 +79,13 @@ ROBOT_MODEL = "m0609"
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
 
+# ========== 추가 ==========
+# [Force Monitor Config]
+FORCE_THRESHOLD = 15.0  # N
+MOVING_AVG_WINDOW = 5
+COOLDOWN_TIME = 1.0  # seconds
+# ==========================
+
 node_ = None
 dsr_control_node_ = None
 manager = None
@@ -81,6 +93,14 @@ tray_manager = None
 vision_cli = None
 place_item_cli = None
 gripper = None
+
+# ========== 추가 ==========
+cli_move_pause = None
+cli_move_resume = None
+is_paused = False
+force_buffer = []
+last_trigger_time = 0.0
+# ==========================
 
 def get_tray_center_pose(slot_id):
     edge_pos = TRAY_0_EDGE_POS if slot_id == 0 else TRAY_1_EDGE_POS
@@ -136,70 +156,22 @@ def transform_camera_to_base(cam_xyz):
 #         if not rclpy.ok(): return False
 #     return True
 
+# ========== 기존 함수 전체 교체 ==========
 def wait_for_motion():
-    # 1. Import를 try-except로 감싸서 안전하게 처리
-    try:
-        from DSR_ROBOT2 import check_motion, get_tool_force, move_pause, move_resume
-        # DR_BASE는 보통 0입니다. Import 실패 시 0으로 대체
-        try:
-            from DSR_ROBOT2 import DR_BASE
-        except ImportError:
-            DR_BASE = 0 
-    except ImportError as e:
-        node_.get_logger().error(f"🚨 DSR_ROBOT2 Import Error: {e}")
-        return True # 임포트 실패 시 감시 없이 동작만 수행하도록 True 반환 (동작 중단 방지)
-
-    # -- Force Settings --
-    FORCE_THRESHOLD = 15.0  
-    RESET_THRESHOLD = 5.0   
+    from DSR_ROBOT2 import check_motion
+    global is_paused
     
-    is_paused = False
-    trigger_lock = False
-
-    time.sleep(0.1) # 모션 시작 대기
-    
-    # [Loop] 
-    while check_motion() != 0 or is_paused:
-        # 1. 외력 감지 (안전 장치 추가)
-        try:
-            f = get_tool_force(DR_BASE) 
-            # f가 None이거나 비어있을 경우 대비
-            if f is not None:
-                f_mag = math.sqrt(f[0]**2 + f[1]**2 + f[2]**2)
-            else:
-                f_mag = 0.0
-        except Exception as e:
-            # 외력 감지 실패해도 루프는 돌게 함 (로그만 1번 찍고 무시 가능)
-            f_mag = 0.0
-
-        # 2. 외력에 따른 Pause/Resume 로직
-        if f_mag > FORCE_THRESHOLD:
-            if not trigger_lock:
-                if not is_paused:
-                    node_.get_logger().warn(f"🛑 Force Detected ({f_mag:.1f}N) -> PAUSE")
-                    move_pause()
-                    is_paused = True
-                else:
-                    node_.get_logger().info(f"▶️ Force Detected ({f_mag:.1f}N) -> RESUME")
-                    move_resume()
-                    is_paused = False
-                trigger_lock = True
-        
-        elif f_mag < RESET_THRESHOLD:
-            trigger_lock = False
-
-        if is_paused:
+    time.sleep(0.1)
+    while check_motion() != 0:
+        # Pause 상태면 대기
+        while is_paused and rclpy.ok():
             time.sleep(0.1)
-            if not rclpy.ok(): return False
-            continue 
-
-        if check_motion() == 0:
-            break
-            
-        time.sleep(0.05)
-        if not rclpy.ok(): return False
         
+        time.sleep(0.05)
+        if not rclpy.ok(): 
+            return False
     return True
+# ========================================
 
 def safe_movej(joints):
     from DSR_ROBOT2 import amovej
@@ -237,6 +209,51 @@ def safe_movel(pos, desc="이동"):
         # ⭐⭐⭐ 에러 내용 출력 ⭐⭐⭐
         node_.get_logger().error(f"   ❌ [{desc}] 오류 (Exception): {e}")
         return False
+    
+# ========== force_callback() 함수 전체 교체 ==========
+def force_callback(msg):
+    """외력 토픽 콜백 - 자동 pause/resume"""
+    global is_paused, force_buffer, last_trigger_time, cli_move_pause, cli_move_resume
+    
+    # Float64MultiArray 구조: msg.data = [fx, fy, fz, tx, ty, tz] (보통 6축)
+    if len(msg.data) < 3:
+        node_.get_logger().warn("⚠️ Tool force data incomplete", throttle_duration_sec=5.0)
+        return
+    
+    # 힘의 크기 계산 (첫 3개 요소: fx, fy, fz)
+    fx, fy, fz = msg.data[0], msg.data[1], msg.data[2]
+    force_magnitude = np.sqrt(fx**2 + fy**2 + fz**2)
+    
+    # 이동평균
+    force_buffer.append(force_magnitude)
+    if len(force_buffer) > MOVING_AVG_WINDOW:
+        force_buffer.pop(0)
+    avg_force = np.mean(force_buffer)
+    
+    # 쿨다운 체크
+    current_time = time.time()
+    if current_time - last_trigger_time < COOLDOWN_TIME:
+        return
+    
+    # 외력 감지 -> 상태 전환
+    if avg_force > FORCE_THRESHOLD:
+        last_trigger_time = current_time
+        
+        if not is_paused:
+            # PAUSE
+            node_.get_logger().warn(f"⛔ Force {avg_force:.1f}N (fx={fx:.1f}, fy={fy:.1f}, fz={fz:.1f}) -> PAUSING")
+            if cli_move_pause and cli_move_pause.service_is_ready():
+                req = MovePause.Request()
+                cli_move_pause.call_async(req)
+                is_paused = True
+        else:
+            # RESUME
+            node_.get_logger().info(f"✅ Force {avg_force:.1f}N (fx={fx:.1f}, fy={fy:.1f}, fz={fz:.1f}) -> RESUMING")
+            if cli_move_resume and cli_move_resume.service_is_ready():
+                req = MoveResume.Request()
+                cli_move_resume.call_async(req)
+                is_paused = False
+# ===================================================
 
 # ==============================================================================
 # [Action] 트레이 집기 (옆구리 잡기 -X -> EDGE_POS로 배치)
@@ -592,7 +609,9 @@ def handle_order_request(request, response):
 
 def main(args=None):
     global node_, dsr_control_node_, manager, tray_manager, vision_cli, place_item_cli
-    
+    # ========== 추가 ==========
+    global cli_move_pause, cli_move_resume
+    # ==========================
     rclpy.init(args=args)
     
     manager = SlotManager()
@@ -610,6 +629,31 @@ def main(args=None):
     node_.create_service(OrderService, '/dsr01/order_service', handle_order_request, callback_group=cb_group)
     vision_cli = node_.create_client(DetectObject, '/dsr01/detect_object', callback_group=cb_group)
     place_item_cli = node_.create_client(PlaceItem, '/place_item', callback_group=cb_group)
+    
+    # ========== 추가 ==========
+    # Force Monitor 구독
+    node_.create_subscription(
+        Float64MultiArray,  # ← 타입 변경
+        f'/{ROBOT_ID}/msg/tool_force',
+        force_callback,
+        10,
+        callback_group=cb_group
+    )
+    
+    # Pause/Resume 클라이언트
+    cli_move_pause = node_.create_client(
+        MovePause,
+        f'/{ROBOT_ID}/motion/move_pause',
+        callback_group=cb_group
+    )
+    cli_move_resume = node_.create_client(
+        MoveResume,
+        f'/{ROBOT_ID}/motion/move_resume',
+        callback_group=cb_group
+    )
+    
+    node_.get_logger().info("🛡️ Force Monitor Integrated")
+    # ==========================
     
     node_.get_logger().info("⏳ Waiting for services...")
     
