@@ -37,8 +37,16 @@ setup(
             'yolo_vision_node_tray = ff_robot.yolo_vision_node_tray:main',
             'kvu = ff_robot.kvu:main',
             'kiosk = ff_robot.kiosk:main',
+<<<<<<< HEAD
             'kiosk_gazebo = ff_robot.kiosk_gazebo:main',
             'obstacle_avoidance = ff_robot.obstacle_avoidance:main',
+=======
+            'kiosk_v15 = ff_robot.kiosk_v15:main',
+            'module1_item = ff_robot.module1_item:main',
+            'module2_manager = ff_robot.module2_manager:main',
+            'module1_item_virtual = ff_robot.module1_item_virtual:main',
+            'module2_manager_virtual = ff_robot.module2_manager_virtual:main',
+>>>>>>> calibration
         ],
     },
 )

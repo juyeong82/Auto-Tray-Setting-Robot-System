@@ -3,7 +3,7 @@ import cv2
 import os
 
 project_folder = "cvs"
-model_filename = "/home/juyeong/ros2_ws/src/back_up/yolo_OD/best.pt" # train 디렉토리에 있는 best.pt를 project_folder로 복사
+model_filename = "/home/juyeong/ros2_ws/src/back_up/yolo_OD/best_seg.pt" # train 디렉토리에 있는 best.pt를 project_folder로 복사
 
 # 모델 로드
 # 자동으로 현재 폴더 기준 경로 설정

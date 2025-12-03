@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# robot_controller_node.py
-# [Final Fix] 그리퍼 전역변수 연결 오류 수정 + Pick X 오프셋 추가
+# robot_controller_node_gem.py (Final Fix: Missing Function Added)
 
 import rclpy
 from rclpy.node import Node
@@ -17,43 +16,77 @@ import DR_init
 from ff_robot_interfaces.srv import OrderService, DetectObject
 from ff_robot.order_logic import SlotManager
 from ff_robot.gripper import GripperManager 
-from ff_robot.tray_manager import TrayManager
+from ff_robot.tray_manager import TrayManager 
 
 sys.stdout.reconfigure(line_buffering=True)
 
-# --------------------------
+# ==============================================================================
 # 🎛️ CONFIGURATION
-# --------------------------
+# ==============================================================================
 GLOBAL_OFFSET_X = 0.0     
 GLOBAL_OFFSET_Y = 0.0
 GLOBAL_OFFSET_Z = -60.0     
 
-# [NEW] 트레이 집을 때 오프셋 설정 (단위: mm)
-# 관측된 위치보다 X축, Z축으로 더 이동해서 잡습니다.
-TRAY_PICK_X_OFFSET = 50.0   # [수정] X축 방향 보정 (필요에 따라 +/- 조절)
-TRAY_PICK_Z_OFFSET = -12  # Z축 방향 보정 (더 깊게 잡기)
+# [1] 트레이 보충용 (옆구리 -X 잡기)
+TRAY_PICK_X_OFFSET = 50.0   
+TRAY_PICK_Z_OFFSET = 0.0    # 오프셋 제거
+TRAY_PICK_HEIGHT_Z = 20.0   # 절대 높이 사용
+
+# [2] 서빙용 (아래쪽 -Y 잡기)
+SERVING_PICK_OFFSET_Y = 120.0 
+SERVING_PICK_Z_OFFSET = -12.0
+SERVING_GRIP_RZ = 90.0        
+
+# [Serving] 서빙 시 미는 거리 (mm)
+SERVING_PUSH_DISTANCE = 150.0 
+
+# [트레이 좌표 - 기준점]
+TRAY_0_POS = [205.0, 20.0, 20.0, 43.35, -180.0, -134.82]
+TRAY_1_POS = [435.0, 20.0, 20.0, 43.35, -180.0, -134.82]
+
+# [트레이 배치 중심 및 서빙 잡기 위치]
+TRAY_CENTER_OFFSET_X = 80.0 
+TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
+TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
+
+TRAY_FLOOR_Z = 25.0  
+SAFE_Z_FLOOR_LIMIT = 10.0 
+
+# [Safe Move]
+APPROACH_HEIGHT = 100.0      
+EXTRA_LIFT_HEIGHT = 50.0     
+DROP_SAFETY_MARGIN = 30.0    
+
+J_TRAY_OBSERVE = [0.0, 30.0, 25.0, 0.0, 110.0, 0.0]  
+J_ITEM_OBSERVE = [-34.0, 33.0, 15.0, 0.0, 132.0, 144.0] 
+J_TABLE_CHECK = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0] 
 
 ITEM_OFFSETS = {
     "burger1": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None}, 
     "burger2": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "burger3": {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
-    "coke":    {"z": 20.0, "rx": 0.0, "ry": 180.0, "rz": None}, 
-    "cider":   {"z": 20.0, "rx": 0.0, "ry": 180.0, "rz": None},
+    "coke":    {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None}, 
+    "cider":   {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "fries":   {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
     "nugget":  {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None},
 }
 
+ITEM_PLACE_Z_OFFSET = {
+    "burger1": 30.0, "burger2": 30.0, "burger3": 30.0, 
+    "fries":   65.0, "nugget":  65.0,
+    "coke":    125.0, "cider":   125.0
+}
+
+FIXED_PICK_Z = {
+    "coke": 84.5, "cider": 84.5
+}
+
 SCALE_X_TARGETS = ['cider', 'coke', 'fries', 'nugget']
 SCALE_Y_TARGETS = ['burger1', 'burger2', 'burger3']
+
 SCALE_FACTOR_X = 1.05 
 SCALE_FACTOR_Y = 1.05
 TILT_FACTOR_X = 0.10
-
-J_TRAY_OBSERVE = [0.0, 30.0, 25.0, 0.0, 110.0, 0.0]  
-J_ITEM_OBSERVE = [45.0, 20.0, 30.0, 0.0, 130.0, 135.0]
-
-APPROACH_HEIGHT = 100.0
-SAFE_Z_FLOOR_LIMIT = -15.0 
 
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
@@ -77,6 +110,24 @@ def load_calibration():
         T_GRIPPER_TO_CAM = np.load(npy_path)
     else:
         sys.exit(1)
+
+# ==============================================================================
+# [Helper] 트레이 진짜 중심 좌표 계산기 (누락된 함수 복구)
+# ==============================================================================
+def get_tray_center_pose(slot_id):
+    # 1. 가장자리(Edge) 좌표 가져오기
+    edge_pos = TRAY_0_EDGE_POS if slot_id == 0 else TRAY_1_EDGE_POS
+    
+    # 2. X축으로 반폭만큼 이동 (중심 찾기)
+    center_pos = list(edge_pos)
+    center_pos[0] += TRAY_CENTER_OFFSET_X 
+    
+    # 3. 회전값 정렬 (음식 놓기 좋은 0.0도)
+    center_pos[3] = 0.0
+    center_pos[4] = 180.0
+    center_pos[5] = 0.0
+    
+    return center_pos
 
 try:
     from ff_robot.onrobot import RG
@@ -116,27 +167,6 @@ def wait_for_motion():
         if not rclpy.ok(): return False
     return True
 
-# def wait_for_motion():
-#     from DSR_ROBOT2 import check_motion
-#     # [수정] 모션 시작 전 안정화 대기 시간을 조금 더 줍니다.
-#     # 명령 직후에는 check_motion이 즉시 반응하지 않을 수 있음
-    
-#     # 1. 움직임이 감지될 때까지 잠깐 대기 (최대 1초)
-#     wait_start = time.time()
-#     while check_motion() == 0:
-#         if time.time() - wait_start > 1.0: 
-#             # 1초가 지났는데도 안 움직이면 진짜 안 움직이는 것이거나 이미 끝난 것
-#             return True
-#         time.sleep(0.05)
-#         if not rclpy.ok(): return False
-        
-#     # 2. 움직임이 시작됨 -> 멈출 때까지 대기
-#     while check_motion() != 0:
-#         time.sleep(0.05)
-#         if not rclpy.ok(): return False
-        
-#     return True
-
 def safe_movej(joints):
     from DSR_ROBOT2 import movej
     try:
@@ -150,12 +180,9 @@ def safe_movej(joints):
 def safe_movel(pos, desc="이동"):
     from DSR_ROBOT2 import movel, DR_BASE, DR_MV_MOD_ABS
     try:
-        node_.get_logger().info(f"   🏃 [{desc}] -> {pos[:3]}") 
         time.sleep(0.05) 
         movel(pos, vel=[100.0, 100.0], acc=[100.0, 100.0], ref=DR_BASE, mod=DR_MV_MOD_ABS)
-        if not wait_for_motion():
-            node_.get_logger().error(f"   ❌ [{desc}] 모션 실패/타임아웃")
-            return False
+        wait_for_motion()
         time.sleep(0.05) 
         return True 
     except Exception as e:
@@ -163,7 +190,7 @@ def safe_movel(pos, desc="이동"):
         return False
 
 # ==============================================================================
-# 물품 집기
+# [Action] 물품 집기
 # ==============================================================================
 def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
     offset_info = ITEM_OFFSETS.get(item_name, {"z": 0.0, "rx": 0.0, "ry": 180.0, "rz": None})
@@ -171,25 +198,22 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
 
     if item_name in SCALE_X_TARGETS:
         delta_x = raw_x - ref_x_pos
-        scaled_delta_x = delta_x * SCALE_FACTOR_X
-        target_x = ref_x_pos + scaled_delta_x + GLOBAL_OFFSET_X
-        
-        tilt_correction_z = 0.0
-        if delta_x > 0: 
-            tilt_correction_z = scaled_delta_x * TILT_FACTOR_X
-        
+        target_x = ref_x_pos + (delta_x * SCALE_FACTOR_X) + GLOBAL_OFFSET_X
+        tilt_z = (delta_x * TILT_FACTOR_X) if delta_x > 0 else 0.0
         target_y = raw_y + GLOBAL_OFFSET_Y
-        target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"] - tilt_correction_z
+        target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"] - tilt_z
     elif item_name in SCALE_Y_TARGETS:
         delta_y = raw_y - ref_y_pos
-        scaled_delta_y = delta_y * SCALE_FACTOR_Y
         target_x = raw_x + GLOBAL_OFFSET_X
-        target_y = ref_y_pos + scaled_delta_y + GLOBAL_OFFSET_Y
+        target_y = ref_y_pos + (delta_y * SCALE_FACTOR_Y) + GLOBAL_OFFSET_Y
         target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"]
     else:
         target_x = raw_x + GLOBAL_OFFSET_X
         target_y = raw_y + GLOBAL_OFFSET_Y
         target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"]
+
+    if item_name in FIXED_PICK_Z:
+        target_z = FIXED_PICK_Z[item_name]
 
     target_rx = offset_info.get("rx", 0.0)
     target_ry = offset_info.get("ry", 180.0)
@@ -199,6 +223,7 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
 
     pick_pose = [target_x, target_y, target_z, target_rx, target_ry, target_rz]
     approach_pose = [target_x, target_y, target_z + APPROACH_HEIGHT, target_rx, target_ry, target_rz]
+    lift_pose = [target_x, target_y, target_z + APPROACH_HEIGHT + EXTRA_LIFT_HEIGHT, target_rx, target_ry, target_rz]
     
     if not safe_movel(approach_pose, "아이템 접근"): return False
     if gripper_manager: gripper_manager.prepare_grip(item_name)
@@ -206,120 +231,106 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
     if gripper_manager: gripper_manager.execute_grip(item_name)
     else:
         if gripper: gripper.close_gripper(); time.sleep(0.5)
-    if not safe_movel(approach_pose, "아이템 상승"): return False
+    if not safe_movel(lift_pose, "아이템 상승(High)"): return False
     return True
 
 # ==============================================================================
-# 트레이 집기
+# [Action] 트레이 집기 (옆구리 잡기 -X -> EDGE_POS로 배치)
 # ==============================================================================
 def pick_and_place_tray(detected_data, slot_id):
-    # [수정] gripper 변수를 전역으로 사용
     global tray_manager, gripper
     
-    # 1. 트레이 정보 및 그립 좌표 계산
     cam_pos = detected_data["position"]
     base_pos = transform_camera_to_base(cam_pos) 
     rotation_rz = detected_data["rotation"][2] 
     
     if base_pos is None: return False
 
-    # (1) TrayManager에서 기본 좌표 계산
+    # [1] 트레이 집기 (옆구리)
     grip_pose = tray_manager.calculate_tray_grip_point(base_pos, rotation_rz)
+    grip_pose[0] += TRAY_PICK_X_OFFSET  
     
-    # (2) [수정] X, Z 오프셋 적용 (여기서 보정)
-    grip_pose[0] += TRAY_PICK_X_OFFSET
-    grip_pose[2] += TRAY_PICK_Z_OFFSET
+    # Z축 강제 고정
+    FORCED_Z = TRAY_PICK_HEIGHT_Z + TRAY_PICK_Z_OFFSET
+    grip_pose[2] = FORCED_Z
     
-    node_.get_logger().info(f"   🍱 Tray Grip Pose (Adjusted): {grip_pose}")
+    node_.get_logger().info(f"   🍱 Tray Side Grip Pose: {grip_pose}")
     
-    # 2. 접근
     approach_pose = grip_pose[:]
     approach_pose[2] += APPROACH_HEIGHT
     
-    # [수정] 그리퍼 열기 (None 체크)
-    if gripper: 
-        node_.get_logger().info("   👐 그리퍼 열기")
-        gripper.open_gripper()
-    
+    if gripper: gripper.open_gripper()
     if not safe_movel(approach_pose, "트레이 접근(상공)"): return False
-    
-    # [디버깅] 하강 전 현재 위치 확인
-    try:
-        from DSR_ROBOT2 import get_current_posx
-        curr_before = get_current_posx()
-        if isinstance(curr_before, tuple): curr_before = curr_before[0]
-        node_.get_logger().info(f"   📍 [하강 전] 현재 위치: Z={curr_before[2]:.1f}mm")
-    except: pass
-    
     if not safe_movel(grip_pose, "트레이 잡기 위치 하강"): return False
+    if gripper: gripper.close_gripper(); time.sleep(1.0)
     
-    # [디버깅] 하강 후 현재 위치 확인
-    try:
-        from DSR_ROBOT2 import get_current_posx
-        curr_after = get_current_posx()
-        if isinstance(curr_after, tuple): curr_after = curr_after[0]
-        node_.get_logger().info(f"   📍 [하강 후] 현재 위치: Z={curr_after[2]:.1f}mm")
-        node_.get_logger().info(f"   📍 [목표 위치] Z={grip_pose[2]:.1f}mm")
-        
-        # 실제로 하강했는지 확인
-        if abs(curr_after[2] - grip_pose[2]) > 20.0:
-            node_.get_logger().error(f"   ❌ 하강 실패! 현재={curr_after[2]:.1f}, 목표={grip_pose[2]:.1f}")
-            return False
-    except Exception as e:
-        node_.get_logger().warn(f"   ⚠️ 위치 확인 실패: {e}")
+    lift_pose = grip_pose[:]
+    lift_pose[2] = 250.0 
+    if not safe_movel(lift_pose, "트레이 높게 들기"): return False
+
+    # [3] 배치 위치: EDGE 좌표 사용 (여기로 끌고 옴)
+    target_pos = TRAY_0_EDGE_POS if slot_id == 0 else TRAY_1_EDGE_POS
     
-    # 3. 그립
-    if gripper: 
-        node_.get_logger().info("   ✊ 그리퍼 닫기")
-        gripper.close_gripper()
-        time.sleep(1.5)
-    
-    # 4. 배치 위치 계산 및 회전값 고정 (Drag 모드)
-    place_pose = tray_manager.calculate_work_table_position(slot_id)
+    place_pose = list(target_pos)
+    # 잡은 회전각 그대로 유지하며 이동
     place_pose[3] = grip_pose[3]
     place_pose[4] = grip_pose[4]
     place_pose[5] = grip_pose[5]
     
-    node_.get_logger().info("   🚚 트레이 끄기(Slide - No Rotation)...")
+    air_pose = place_pose[:]
+    air_pose[2] = 250.0
     
-    if not safe_movel(place_pose, "트레이 끌어서 이동"): return False
+    if not safe_movel(air_pose, "트레이 공중 이동"): return False
+    if not safe_movel(place_pose, "트레이 배치 하강"): return False
     
-    # 5. 그리퍼 열기
-    if gripper: 
-        node_.get_logger().info("   👐 그리퍼 열기")
-        gripper.open_gripper()
-        time.sleep(1.0)
-        
-    # 6. 상승
+    if gripper: gripper.open_gripper(); time.sleep(0.5)
+    
     depart_pose = place_pose[:]
     depart_pose[2] += APPROACH_HEIGHT
-    
-    if not safe_movel(depart_pose, "작업 완료 후 상승"): return False
+    if not safe_movel(depart_pose, "작업 완료 상승"): return False
     
     return True
 
+# ==============================================================================
+# [Action] 서빙 (아래 잡고 밀기 -Y)
+# ==============================================================================
 def serve_tray(slot_id):
-    global tray_manager
+    global tray_manager, gripper
     
-    work_pose = tray_manager.calculate_work_table_position(slot_id)
-    grip_pose = work_pose[:] 
+    # [수정] 진짜 중심 좌표를 가져와서 사용
+    center_pos = get_tray_center_pose(slot_id)
     
-    approach = grip_pose[:]
+    # [아래쪽 잡기]
+    grip_pose = list(center_pos)
+    grip_pose[1] -= SERVING_PICK_OFFSET_Y # 아래쪽(-Y)으로 이동
+    grip_pose[2] = TRAY_FLOOR_Z + SERVING_PICK_Z_OFFSET 
+    grip_pose[5] = SERVING_GRIP_RZ # 가로 회전
+    
+    approach = list(grip_pose)
     approach[2] += APPROACH_HEIGHT
     
+    node_.get_logger().info(f"   🍽️ 서빙 시작 (Slot {slot_id}) - 좌표: {grip_pose[:3]}")
+    
+    if gripper: gripper.open_gripper()
     if not safe_movel(approach, "서빙 준비 접근"): return False
-    if not safe_movel(grip_pose, "서빙 그립"): return False
-    if gripper: gripper.close_gripper(); time.sleep(0.5)
-    if not safe_movel(approach, "서빙 들기"): return False
+    if not safe_movel(grip_pose, "서빙 그립 하강"): return False
+    if gripper: gripper.close_gripper(); time.sleep(1.0)
     
-    serve_pose = tray_manager.calculate_serve_position(slot_id)
-    serve_approach = serve_pose[:]
-    serve_approach[2] += APPROACH_HEIGHT
+    # 2. 밀기
+    push_pose = list(grip_pose)
+    push_pose[1] += SERVING_PUSH_DISTANCE # +Y 방향
     
-    if not safe_movel(serve_approach, "서빙 위치 접근"): return False
-    if not safe_movel(serve_pose, "서빙"): return False
+    node_.get_logger().info(f"   🚀 서빙 밀기 (+Y {SERVING_PUSH_DISTANCE}mm)")
+    
+    if not safe_movel(push_pose, "서빙 밀기 동작"): return False
+    
+    # 3. 놓기 및 복귀
     if gripper: gripper.open_gripper(); time.sleep(0.5)
-    if not safe_movel(serve_approach, "완료"): return False
+    
+    depart = list(push_pose)
+    depart[2] += APPROACH_HEIGHT
+    
+    if not safe_movel(depart, "서빙 완료 후 상승"): return False
     
     return True
 
@@ -331,21 +342,19 @@ def call_vision_service(target_name):
     
     start = time.time()
     while not future.done():
-        if time.time() - start > 10.0: return None
+        if time.time() - start > 5.0: return None
         time.sleep(0.1) 
     try:
         res = future.result()
         if res.found:
-            return {
-                "position": [res.position.x, res.position.y, res.position.z],
-                "rotation": [res.rx, res.ry, res.rz], 
-                "confidence": res.confidence
-            }
+            return {"position": [res.position.x, res.position.y, res.position.z], "rotation": [res.rx, res.ry, res.rz], "confidence": res.confidence}
     except: pass
     return None
 
+# ==============================================================================
+# MAIN TASK LOOP
+# ==============================================================================
 def perform_robot_task():
-    # [수정] global gripper 추가 (이게 없어서 그리퍼가 안 됐음)
     global manager, gripper_manager, tray_manager, gripper
     try: from DSR_ROBOT2 import movej, get_current_posx
     except: return
@@ -364,65 +373,88 @@ def perform_robot_task():
 
     while rclpy.ok():
         try:
-            # 1. 빈 슬롯 채우기
-            empty_slot = tray_manager.get_empty_slot()
-            if empty_slot is not None and (manager.pending_queue or not manager.get_all_needed_items()):
-                node_.get_logger().info(f"🔎 [Phase 1] 트레이 탐색 (Slot {empty_slot})")
+            # Phase 1: 트레이 준비
+            target_tray_slot = tray_manager.get_empty_slot()
+            if target_tray_slot is not None:
+                node_.get_logger().info(f"🔎 [Phase 1] 선제적 트레이 준비 (Slot {target_tray_slot})")
                 safe_movej(J_TRAY_OBSERVE)
                 time.sleep(1.0)
-                
                 tray_data = call_vision_service("tray")
                 if tray_data:
-                    if pick_and_place_tray(tray_data, empty_slot):
-                        if manager.pending_queue:
-                            manager.clear_slot(empty_slot)
-                        tray_manager.update_tray_status(empty_slot, "working")
-                        # [수정] 트레이 배치 완료 후 관측 자세로 복귀
-                        node_.get_logger().info("   ↩️  트레이 배치 완료, 관측 자세로 복귀")
-                        safe_movej(J_TRAY_OBSERVE)
-                        continue 
+                    if pick_and_place_tray(tray_data, target_tray_slot):
+                        if manager.pending_queue and manager.active_slots[target_tray_slot] is None:
+                            manager.clear_slot(target_tray_slot)
+                        tray_manager.update_tray_status(target_tray_slot, "working")
+                        continue
 
-            # 2. 물품 배치
+            # Phase 2: 물품 배치
             needed_items = manager.get_all_needed_items()
             if needed_items:
                 target_item = needed_items[0]
-                node_.get_logger().info(f"🔎 [Phase 2] 물품 탐색: '{target_item}'")
-                safe_movej(J_ITEM_OBSERVE)
-                time.sleep(1.0)
                 
-                try:
-                    curr_pos = get_current_posx()
-                    if isinstance(curr_pos, tuple): curr_pos = curr_pos[0]
-                    ref_x_pos, ref_y_pos = curr_pos[0], curr_pos[1]
-                except: ref_x_pos, ref_y_pos = 0.0, 0.0
+                valid_target = False
+                for sid, data in manager.active_slots.items():
+                    if data and target_item in data['needed'] and \
+                       data['placed_total'].count(target_item) < data['needed'].count(target_item):
+                        if tray_manager.tray_states[sid]['status'] == 'working':
+                            valid_target = True
+                            break
+                
+                if valid_target:
+                    node_.get_logger().info(f"🔎 [Phase 2] 물품 탐색: '{target_item}'")
+                    safe_movej(J_ITEM_OBSERVE)
+                    time.sleep(1.0)
+                    
+                    try:
+                        curr_pos = get_current_posx()
+                        if isinstance(curr_pos, tuple): curr_pos = curr_pos[0]
+                        ref_x_pos, ref_y_pos = curr_pos[0], curr_pos[1]
+                        safe_travel_z = max(curr_pos[2], 150.0)
+                    except: ref_x_pos, ref_y_pos, safe_travel_z = 0.0, 0.0, 200.0
 
-                if gripper_manager: gripper_manager.prepare_grip(target_item)
-                
-                item_data = call_vision_service(target_item)
-                if item_data:
-                    base_xyz = transform_camera_to_base(item_data["position"])
-                    if base_xyz is not None:
-                        rz_obb = item_data["rotation"][2]
-                        full_pose = [base_xyz[0], base_xyz[1], base_xyz[2], 0, 0, rz_obb]
-                        
-                        if safe_move_and_pick_item(full_pose, target_item, ref_x_pos, ref_y_pos, rz_obb):
-                            target_slot = None
-                            for sid, data in manager.active_slots.items():
-                                if data and target_item in data['needed'] and data['placed_total'].count(target_item) < data['needed'].count(target_item):
-                                    target_slot = sid
-                                    break
+                    if gripper_manager: gripper_manager.prepare_grip(target_item)
+                    item_data = call_vision_service(target_item)
+                    
+                    if item_data:
+                        base_xyz = transform_camera_to_base(item_data["position"])
+                        if base_xyz is not None:
+                            rz_obb = item_data["rotation"][2]
+                            full_pose = [base_xyz[0], base_xyz[1], base_xyz[2], 0, 0, rz_obb]
                             
-                            if target_slot is not None:
-                                place_pos = tray_manager.calculate_work_table_position(target_slot)
-                                place_pos[2] += 20.0 
-                                safe_movel(place_pos, "물품 배치")
-                                if gripper_manager: gripper_manager.release(target_item)
+                            if safe_move_and_pick_item(full_pose, target_item, ref_x_pos, ref_y_pos, rz_obb):
+                                target_slot = None
+                                for sid, data in manager.active_slots.items():
+                                    if data and target_item in data['needed'] and \
+                                       data['placed_total'].count(target_item) < data['needed'].count(target_item):
+                                        target_slot = sid
+                                        break
                                 
-                                is_done = manager.mark_item_done(target_slot, target_item)
-                                if is_done:
-                                    tray_manager.update_tray_status(target_slot, "ready")
-                        
-            # 3. 서빙
+                                if target_slot is not None:
+                                    center_tray_pos = get_tray_center_pose(target_slot)
+                                    slot_data = manager.active_slots[target_slot]
+                                    current_idx = len(slot_data['placed_total'])
+                                    total_count = len(slot_data['needed'])
+                                    
+                                    grid_pos = manager.get_tray_place_pose(center_tray_pos, current_idx, total_count)
+                                    
+                                    approach_place = list(grid_pos)
+                                    approach_place[2] = safe_travel_z 
+                                    
+                                    if safe_movel(approach_place, "배치 상공 접근"):
+                                        item_h = ITEM_PLACE_Z_OFFSET.get(target_item, 30.0)
+                                        final_z = TRAY_FLOOR_Z + item_h + DROP_SAFETY_MARGIN
+                                        drop_pose = list(approach_place)
+                                        drop_pose[2] = final_z
+                                        
+                                        if safe_movel(drop_pose, "배치 하강"):
+                                            if gripper_manager: gripper_manager.release(target_item)
+                                            is_done = manager.mark_item_done(target_slot, target_item)
+                                            if is_done:
+                                                tray_manager.update_tray_status(target_slot, "ready")
+                else:
+                    time.sleep(0.5)
+
+            # Phase 3: 서빙
             ready_slot = tray_manager.get_ready_slot()
             if ready_slot is not None:
                 node_.get_logger().info(f"🍽️ [Phase 3] 서빙 시작 (Slot {ready_slot})")

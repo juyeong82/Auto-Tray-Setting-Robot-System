@@ -33,7 +33,13 @@ class TestNode(Node):
         # Eye-to-Hand 캘리브레이션 결과 행렬 로드
         try:
             # 파일 이름이 T_cam2base.npy인지 확인 필수
+<<<<<<< HEAD
             self.T_cam2base = np.load("T_cam2base.npy")
+=======
+            # self.T_cam2base = np.load("T_cam2base.npy")
+            self.T_cam2base = np.load("/home/juyeong/ros2_ws/src/back_up/Tutorial/Calibration_Tutorial/T_cam2base.npy")
+            
+>>>>>>> calibration
             self.get_logger().info(f"Calibration Matrix Loaded:\n{self.T_cam2base}")
         except FileNotFoundError:
             self.get_logger().error("T_cam2base.npy 파일을 찾을 수 없습니다. 단위 행렬을 사용합니다.")

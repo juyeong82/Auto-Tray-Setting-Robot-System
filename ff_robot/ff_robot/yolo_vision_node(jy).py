@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# yolo_vision_node_gazebo.py - Gazebo 토픽 매칭 버전
+# yolo_vision_node.py (QoS Matched: Reliable + Volatile)
 
 import rclpy
 from rclpy.node import Node
@@ -13,6 +13,7 @@ from ultralytics import YOLO
 import time
 import os
 
+# [핵심] QoS 설정 모듈
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from ff_robot_interfaces.srv import DetectObject 
@@ -23,23 +24,32 @@ class YoloVisionNode(Node):
         super().__init__('yolo_vision_node')
         
         self.get_logger().info("=========================================")
-        self.get_logger().info("🚀 YOLO Vision Node (Gazebo Matched)")
+        self.get_logger().info("🚀 YOLO Vision Node (QoS Matched)")
         self.get_logger().info("=========================================")
         
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.model_path = os.path.join(current_dir, "models", "best.pt")
         
+        # self.model_path = "/home/juyeong/ros2_ws/src/ff_robot/ff_robot/models/best.pt"
         self.bridge = CvBridge()
         self.latest_color_img = None
         self.latest_depth_img = None
         self.camera_intrinsics = None 
         
+        # try:
+        #     self.model = YOLO(self.model_path) 
+        #     self.get_logger().info("✅ YOLO 모델 로드 완료")
+        # except Exception as e:
+        #     self.get_logger().error(f"모델 로드 실패: {e}")
+            
         try:
             self.model = YOLO(self.model_path)
+            
+            # GPU 사용 확인
             device = self.model.device
             self.get_logger().info(f"✅ YOLO 모델 로드 완료 (Device: {device})")
             
-            # GPU 워밍업
+            # ⭐ GPU 워밍업 (첫 추론 시 지연 방지)
             dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
             _ = self.model(dummy_img, verbose=False)
             self.get_logger().info("✅ GPU 워밍업 완료")
@@ -47,27 +57,27 @@ class YoloVisionNode(Node):
         except Exception as e:
             self.get_logger().error(f"모델 로드 실패: {e}")
 
-        # QoS 설정
+        # [핵심 수정] 터미널에서 확인된 QoS 정보와 100% 일치시킴
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE,       # 확인됨
+            durability=DurabilityPolicy.VOLATILE,         # 확인됨 (이게 안 맞아서 안 됐음)
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
 
         self.cb_group = ReentrantCallbackGroup()
 
-        # ✅ Gazebo 토픽으로 변경
+        # 토픽 구독
         self.create_subscription(
-            Image, '/dsr01/camera/color/image_raw',  # Gazebo RGB
+            Image, '/camera/camera/color/image_raw', 
             self.color_callback, qos_profile, callback_group=self.cb_group
         )
         self.create_subscription(
-            Image, '/dsr01/camera/depth/image_rect_raw',  # Gazebo Depth
+            Image, '/camera/camera/aligned_depth_to_color/image_raw', 
             self.depth_callback, qos_profile, callback_group=self.cb_group
         )
         self.create_subscription(
-            CameraInfo, '/dsr01/d435i/camera_info',  # Gazebo Camera Info
+            CameraInfo, '/camera/camera/color/camera_info', 
             self.info_callback, qos_profile, callback_group=self.cb_group
         )
 
@@ -78,29 +88,23 @@ class YoloVisionNode(Node):
         self.get_logger().info("👀 서비스 서버 준비 완료")
 
     def color_callback(self, msg):
-        try: 
-            self.latest_color_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-        except Exception as e:
-            self.get_logger().error(f"RGB 변환 실패: {e}")
+        try: self.latest_color_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        except: pass
 
     def depth_callback(self, msg):
-        try: 
-            self.latest_depth_img = self.bridge.imgmsg_to_cv2(msg, "16UC1")
-        except Exception as e:
-            self.get_logger().error(f"Depth 변환 실패: {e}")
+        try: self.latest_depth_img = self.bridge.imgmsg_to_cv2(msg, "16UC1")
+        except: pass
 
     def info_callback(self, msg):
         if self.camera_intrinsics is None:
             K = msg.k
             self.camera_intrinsics = {'fx': K[0], 'fy': K[4], 'ppx': K[2], 'ppy': K[5]}
-            self.get_logger().info(f"✅ 카메라 파라미터: fx={K[0]:.1f}, fy={K[4]:.1f}, ppx={K[2]:.1f}, ppy={K[5]:.1f}")
+            self.get_logger().info("✅ 카메라 파라미터 수신 완료")
 
     def pixel_to_3d_cam(self, u, v, depth_mm):
-        if self.camera_intrinsics is None: 
-            return None
+        if self.camera_intrinsics is None: return None
         z = depth_mm / 1000.0 
-        if z <= 0: 
-            return None
+        if z <= 0: return None
         x = (u - self.camera_intrinsics['ppx']) * z / self.camera_intrinsics['fx']
         y = (v - self.camera_intrinsics['ppy']) * z / self.camera_intrinsics['fy']
         return np.array([x, y, z])
@@ -109,27 +113,40 @@ class YoloVisionNode(Node):
         target_name = request.target_object_id
         self.get_logger().info(f"🔎 YOLO 요청 수신: '{target_name}'")
 
-        inference_start = time.time()
+        # # 대기 로직 (이미지 들어올 때까지)
+        # wait_start = time.time()
+        # while self.latest_color_img is None or self.latest_depth_img is None:
+        #     if time.time() - wait_start > 5.0: 
+        #         self.get_logger().error(f"❌ [Timeout] 이미지 수신 실패 (5초)")
+        #         response.found = False
+        #         return response
+        #     time.sleep(0.05)
+            
+        inference_start = time.time()  # ⭐ 전체 처리 시간 측정 시작
 
-        # 이미지 수신 확인
+        # 이미지 수신 확인 (대기 없음)
         if self.latest_color_img is None or self.latest_depth_img is None:
+            # 최대 1초만 대기 (카메라 30fps이면 33ms면 충분)
             wait_start = time.time()
             while self.latest_color_img is None or self.latest_depth_img is None:
-                if time.time() - wait_start > 1.0:
+                if time.time() - wait_start > 1.0:  # 5초 → 1초로 단축
                     self.get_logger().error(f"❌ [Timeout] 이미지 수신 실패")
                     response.found = False
                     return response
-                time.sleep(0.01)
+                time.sleep(0.01)  # ⭐ 50ms → 10ms로 단축
 
         # YOLO 추론
+        # results = self.model(self.latest_color_img, verbose=False)
+        
+        # ⭐ YOLO 추론 (시간 측정)
         yolo_start = time.time()
         results = self.model(self.latest_color_img, verbose=False)
-        yolo_time = (time.time() - yolo_start) * 1000
+        yolo_time = (time.time() - yolo_start) * 1000  # ms 단위
         
         found_target = False
         center_x, center_y = 0, 0
         box_w, box_h = 20, 20
-        rotation_rad = 0.0
+        rotation_rad = 0.0  # OBB 회전각 (라디안)
 
         for r in results:
             if r.obb is not None:
@@ -140,7 +157,7 @@ class YoloVisionNode(Node):
                         c_x, c_y, w, h, rot = box.xywhr[0].cpu().numpy()
                         center_x, center_y = int(c_x), int(c_y)
                         box_w, box_h = int(w), int(h)
-                        rotation_rad = float(rot)
+                        rotation_rad = float(rot)  # OBB 회전각 저장
                         found_target = True
                         self.get_logger().info(f"OBB 회전각: {np.degrees(rotation_rad):.1f}°")
                         break
@@ -154,6 +171,7 @@ class YoloVisionNode(Node):
                         center_y = int((y1+y2)/2)
                         box_w, box_h = abs(x2-x1), abs(y2-y1)
                         found_target = True
+                        self.get_logger().info(f"OBB 회전각: {np.degrees(rotation_rad):.1f}°")
                         break
 
         if not found_target:
@@ -174,6 +192,7 @@ class YoloVisionNode(Node):
         valid_depths = roi[roi > 0]
         
         if len(valid_depths) == 0:
+            # 고정값 사용 (60cm)
             depth_mm = 600.0
             self.get_logger().warn(f"   ⚠️ Depth 0 -> 고정값 600mm 사용")
         else:
@@ -189,22 +208,27 @@ class YoloVisionNode(Node):
 
         response.found = True
         response.position = Point(x=cam_point[0], y=cam_point[1], z=cam_point[2])
+        # response.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0) 
         
-        # OBB 회전각을 Quaternion으로 변환
+        
+        # OBB 회전각을 Quaternion으로 변환 (Z축 기준 회전)
+        # Quaternion 공식: q = [0, 0, sin(θ/2), cos(θ/2)] (Z축 회전)
         half_angle = rotation_rad / 2.0
         qz = np.sin(half_angle)
         qw = np.cos(half_angle)
-        response.orientation = Quaternion(x=0.0, y=0.0, z=qz, w=qw)
+        response.orientation = Quaternion(x=0.0, y=0.0, z=qz, w=qw)  # ✨ 실제 회전 정보 전달
         
-        # mm로 변환 후 오프셋 적용
+        # self.get_logger().info(f"   ✅ 좌표 반환: X={cam_point[0]:.3f}, Y={cam_point[1]:.3f}, Z={cam_point[2]+0.170:.3f}")
+        # mm로 변환 후, 메인 노드에서 쓰는 것과 같은 오프셋 적용
         x_mm = cam_point[0] * 1000.0
         y_mm = cam_point[1] * 1000.0 - 20.0
         z_mm = cam_point[2] * 1000.0 + 170.0
         
+        # ⭐ 성능 로그
         total_time = (time.time() - inference_start) * 1000
         self.get_logger().info(
             f"   ✅ 보정 좌표(mm): X={x_mm:.1f}, Y={y_mm:.1f}, Z={z_mm:.1f} | 회전: {np.degrees(rotation_rad):.1f}°"
-            f" | YOLO: {yolo_time:.0f}ms, 전체: {total_time:.0f}ms"
+            f"| YOLO: {yolo_time:.0f}ms, 전체: {total_time:.0f}ms"
         )
         return response
 
@@ -213,10 +237,8 @@ def main(args=None):
     node = YoloVisionNode()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    try: 
-        executor.spin()
-    except KeyboardInterrupt: 
-        pass
+    try: executor.spin()
+    except KeyboardInterrupt: pass
     finally:
         node.destroy_node()
         rclpy.shutdown()

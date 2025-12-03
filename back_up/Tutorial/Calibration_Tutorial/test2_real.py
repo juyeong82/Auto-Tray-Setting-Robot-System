@@ -10,8 +10,13 @@ import DR_init
 # ==========================================
 # [설정] 동작 및 오프셋 파라미터
 VELOCITY, ACC = 40, 40   # 이동 속도
+<<<<<<< HEAD
 HOVER_HEIGHT = 0.0     # Z축: 바닥에서 얼마나 띄울지 (mm)
 WAIT_TIME = 10.0          # 대기 시간 (초)
+=======
+HOVER_HEIGHT = 10     # Z축: 바닥에서 얼마나 띄울지 (mm)
+WAIT_TIME = 0          # 대기 시간 (초)
+>>>>>>> calibration
 
 # [중요] 좌표 오프셋 설정 (mm 단위)
 OFFSET_X = 0   # X축 -50mm 이동
@@ -36,7 +41,12 @@ class TestOffsetMoveNode(Node):
         self.JReady = posj([0, 0, 90, 0, 90, 0])
 
         try:
+<<<<<<< HEAD
             self.T_cam2base = np.load("T_cam2base.npy")
+=======
+            # self.T_cam2base = np.load("T_cam2base.npy")
+            self.T_cam2base = np.load("/home/juyeong/ros2_ws/src/back_up/Tutorial/Calibration_Tutorial/T_cam2base.npy")
+>>>>>>> calibration
             self.get_logger().info("✅ T_cam2base.npy 로드 성공")
         except FileNotFoundError:
             self.get_logger().error("🚨 T_cam2base.npy 파일 없음")
@@ -108,7 +118,11 @@ class TestOffsetMoveNode(Node):
 
         # 2. 홈 복귀
         print("🏠 홈으로 복귀")
+<<<<<<< HEAD
         movej(self.JReady, vel=VELOCITY, acc=ACC)
+=======
+        # movej(self.JReady, vel=VELOCITY, acc=ACC)
+>>>>>>> calibration
         print("✅ 완료.\n")
 
     def get_camera_pos(self, u, v, z, intrin):
