@@ -1,0 +1,16 @@
+# PlaceItem.srv
+# 단일 아이템 배치 작업 요청 인터페이스
+
+# Request
+string item_name          # 배치할 아이템 이름 (예: "burger1", "coke")
+int32 target_slot_id      # 목표 트레이 슬롯 번호 (0 or 1)
+int32 item_index          # 트레이 내 배치 순서 (0~3)
+int32 total_items         # 해당 트레이의 총 아이템 수 (배치 패턴 결정용)
+
+---
+# Response
+bool success              # 작업 성공 여부
+string message            # 결과 메시지 또는 에러 내용
+float32 actual_x          # 실제 배치된 X 좌표 (mm)
+float32 actual_y          # 실제 배치된 Y 좌표 (mm)
+float32 actual_z          # 실제 배치된 Z 좌표 (mm)

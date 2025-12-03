@@ -8,7 +8,7 @@ import DR_init
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
 VELOCITY, ACC = 60, 60
-DEVICE_NUMBER = 4
+DEVICE_NUMBER = 6
 
 DR_init.dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL

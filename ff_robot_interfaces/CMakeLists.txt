@@ -18,6 +18,7 @@ set(msg_files
 set(srv_files
   "srv/OrderService.srv"
   "srv/DetectObject.srv"
+  "srv/PlaceItem.srv"
 )
 
 set(action_files
