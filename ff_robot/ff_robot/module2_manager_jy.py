@@ -17,6 +17,7 @@ import os
 import sys
 from scipy.spatial.transform import Rotation as R
 import math
+import threading
 from std_msgs.msg import Int32  # 속도 제어 메시지 추가
 
 import DR_init
@@ -62,7 +63,11 @@ TRAY_CENTER_OFFSET_X = 80.0
 TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 
-TRAY_FLOOR_Z = -15.0  # ⬆️ 변경: 25.0 → -25.0
+
+J_TRAY_PUSH_0 = [-23.22, 0.82, 121.41, -0.02, 57.77, 158.21]
+J_TRAY_PUSH_1 = [-14.07, 30.29, 82.65, 0.03, 66.89, 167.03]
+
+TRAY_FLOOR_Z = -20.0  # ⬆️ 변경: 25.0 → -25.0
 # SAFE_Z_FLOOR_LIMIT = 0
 
 APPROACH_HEIGHT = 100.0
@@ -85,7 +90,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 20.0  # N
+FORCE_THRESHOLD = 25.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================
@@ -384,54 +389,65 @@ def serve_tray(slot_id):
     # 1. 트레이 배치 위치(작업대 위)의 중심 좌표를 가져옵니다.
     center_pos = get_tray_center_pose(slot_id)
     
-    # 2. 푸시 시작점 계산 (트레이 뒤쪽 경계)
-    # 트레이의 Y축 길이를 고려하여 중심보다 뒤쪽으로 150mm 이동 (트레이 뒤를 넘어가야 함)
-    # (SERVING_PICK_OFFSET_Y 대신 트레이의 후방 끝 지점을 가정합니다.)
-    
-    # if gripper:
-    #     try:
-    #         node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
-    #         # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
-    #         gripper.close_gripper_gripper() 
-    #         time.sleep(0.5) 
-    #     except Exception as e:
-    #         node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
-    
-    # 트레이가 작업대 중앙에 배치되어 있다고 가정하고, 뒤쪽으로 50mm 더 가서 접촉점을 만듭니다.
+    # 2. 푸시 시작점 계산 (상공 접근용 좌표만 계산)
     push_start_offset_y = 150.0 
     push_contact_pos = list(center_pos)
-    push_contact_pos[1] -= push_start_offset_y # Y축 마이너스 방향으로 이동 (뒤쪽)
+    push_contact_pos[1] -= push_start_offset_y 
     push_contact_pos[5] = SERVING_GRIP_RZ
     
     # 3. 그리퍼 열기 (그리퍼 밑판을 푸시 툴로 사용)
     if gripper:
         try:
             node_.get_logger().info("   👐 그리퍼 열기 (푸시 준비)")
-            # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
-            gripper.open_gripper_gripper() 
+            gripper.open_gripper() 
             time.sleep(0.5) 
         except Exception as e:
             node_.get_logger().warn(f"⚠️ Gripper open failed: {e}")
             
-    # 4. 접근 위치 (상공)
+    # 4. 접근 위치 (상공) - 기존 유지 (안전을 위해 위로 먼저 이동)
     approach_push = list(push_contact_pos)
     approach_push[2] += APPROACH_HEIGHT # 안전한 높이로 접근
     if not safe_movel(approach_push, "서빙 (뒤) 상공 접근"): return False
 
-    # 5. 푸시 높이로 하강 (트레이 높이 + 바닥 Z 값)
-    # TRAY_FLOOR_Z = -25.0 이고 트레이 높이가 15mm 정도라고 가정할 때,
-    push_height = TRAY_FLOOR_Z 
-    push_pose = list(push_contact_pos)
-    push_pose[2] = -15
+    # =========================================================================
+    # [수정됨] 5. 푸시 시작 위치로 하강 (Joint 이동 사용)
+    # =========================================================================
+    # 좌표 계산(TRAY_FLOOR_Z 등)을 쓰지 않고, 티칭된 관절 각도로 바로 이동하여 Z축을 고정합니다.
+    # target_joint = J_TRAY_PUSH_0 if slot_id == 0 else J_TRAY_PUSH_1
     
-    if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
+    # node_.get_logger().info(f"   ⬇️ 서빙 높이 하강 (Joint 이동): Slot {slot_id}")
+    
+    # # safe_movej를 사용하여 관절 이동 (특이점 회피 및 Z축 높이 확정)
+    # if not safe_movej(target_joint): 
+    #     node_.get_logger().error("   ❌ 서빙 하강 실패 (MoveJ)")
+    #     return False
 
-    # 6. ⭐⭐⭐ 푸시 실행 (Y축 정방향으로 SERVING_PUSH_DISTANCE만큼 밀기) ⭐⭐⭐
-    final_push_pose = list(push_pose)
-    final_push_pose[1] += SERVING_PUSH_DISTANCE # Y축 플러스 방향(고객 방향)으로 이동
+    # [복구됨] 좌표(Z)로 하강하는 로직
+    # TRAY_FLOOR_Z는 설정값(현재 -15.0)을 사용합니다.
+    push_pose = list(push_contact_pos)
+    push_pose[2] = TRAY_FLOOR_Z
+
+    node_.get_logger().info(f"   ⬇️ 서빙 높이 하강 (Movel): Z={TRAY_FLOOR_Z}")
+    if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
+    # =========================================================================
+    # [수정됨] 6. 푸시 실행 (현재 Joint 위치 기준 Y축 이동)
+    # =========================================================================
+    from DSR_ROBOT2 import get_current_posx
+    
+    # 방금 Joint로 이동한 '실제 로봇 위치'를 가져옵니다.
+    curr_pos = get_current_posx()
+    if curr_pos is None: return False
+    
+    # API 버전에 따라 튜플((pos, sol))로 올 수 있으므로 처리
+    start_push_pose = list(curr_pos[0]) if isinstance(curr_pos, tuple) else list(curr_pos)
+    
+    # 목표 위치 계산 (현재 위치에서 Y축만 증가시킴)
+    final_push_pose = list(start_push_pose)
+    final_push_pose[1] += SERVING_PUSH_DISTANCE 
     
     node_.get_logger().info(f"   🚀 서빙 밀기 시작 (+Y {SERVING_PUSH_DISTANCE}mm)")
     
+    # Z축은 Joint 이동으로 맞춰진 높이가 그대로 유지됨 (Linear Move)
     if not safe_movel(final_push_pose, "트레이 밀기 동작"): return False
 
     # 7. 안전하게 상승하여 복귀
@@ -551,38 +567,66 @@ def perform_robot_task():
                     node_.get_logger().info(f"🔎 [Phase 1] 트레이 보충 (Slot {sid})")
                     ensure_tray_in_slot(sid)
 
-            # Phase 2: 물품 배치
+            # =================================================================
+            # [수정] Phase 2: 아이템 배치 (재고 유무에 따른 유동적 순서 처리)
+            # =================================================================
             needed_items = manager.get_all_needed_items()
-            if needed_items:
-                target_item = needed_items[0]
-                
-                valid_target = False
-                for sid, data in manager.active_slots.items():
-                    if data and target_item in data['needed'] and \
-                       data['placed_total'].count(target_item) < data['needed'].count(target_item):
-                        if tray_manager.tray_states[sid]['status'] == 'working':
-                            valid_target = True
-                            break
-                
-                if valid_target:
-                    node_.get_logger().info(f"🔎 [Phase 2] 물품 탐색: '{target_item}'")
+            
+            # 1. 중복 제거 (순서 유지: FIFO)
+            # 예: ['burger', 'burger', 'coke'] -> ['burger', 'coke']
+            unique_needed_items = []
+            for x in needed_items:
+                if x not in unique_needed_items:
+                    unique_needed_items.append(x)
+
+            target_item = None
+            
+            # [핵심 수정] 재고를 확인하려면 먼저 '관측 위치'로 가서 봐야 합니다!
+            if unique_needed_items:
+                # 서빙하고 돌아왔거나 딴청 피우고 있을 수 있으니 강제로 이동
+                safe_movej(J_ITEM_OBSERVE)
+                time.sleep(0.5) # 카메라 흔들림 안정화
+
+                # 리스트를 순회하며 "지금 비전으로 보이는 것"을 찾음
+                for item_candidate in unique_needed_items:
+                    # 비전 서비스 호출
+                    vision_check = call_vision_service(item_candidate)
                     
-                    target_slot = None
-                    for sid, data in manager.active_slots.items():
-                        if data and target_item in data['needed'] and \
-                           data['placed_total'].count(target_item) < data['needed'].count(target_item):
-                            target_slot = sid
-                            break
+                    if vision_check is not None:
+                        target_item = item_candidate
+                        if item_candidate != unique_needed_items[0]:
+                            node_.get_logger().info(f"🔀 [우선순위 변경] '{unique_needed_items[0]}' 부재 -> '{target_item}' 먼저 처리")
+                        break
+                    else:
+                        pass
+
+            # 3. 작업 수행 (타겟이 결정된 경우)
+            if target_item:
+                target_slot = manager.peek_target_slot(target_item)
+
+            # 3. 작업 수행 (타겟이 결정된 경우)
+            if target_item:
+                target_slot = manager.peek_target_slot(target_item)
+                
+                # 유효성 검사 (해당 슬롯이 working 상태여야 함)
+                if tray_manager.tray_states[target_slot]['status'] == 'working':
+                    slot_data = manager.active_slots[target_slot]
+                    current_idx = len(slot_data['placed_total'])
+                    total_count = len(slot_data['needed'])
                     
-                    if target_slot is not None:
-                        slot_data = manager.active_slots[target_slot]
-                        current_idx = len(slot_data['placed_total'])
-                        total_count = len(slot_data['needed'])
-                        
-                        if call_place_item_service(target_item, target_slot, current_idx, total_count):
-                            is_done = manager.mark_item_done(target_slot, target_item)
-                            if is_done:
-                                tray_manager.update_tray_status(target_slot, "ready")
+                    # Module 1에게 작업 요청
+                    if call_place_item_service(target_item, target_slot, current_idx, total_count):
+                        is_done = manager.mark_item_done(target_slot, target_item)
+                        if is_done:
+                            tray_manager.update_tray_status(target_slot, "ready")
+                else:
+                    time.sleep(0.5)
+            else:
+                # 필요한 건 있는데 아무것도 안 보임 -> 대기
+                if needed_items:
+                    # 로그 너무 많이 뜨지 않게 1초 대기
+                    # node_.get_logger().info(f"⏳ 재고 대기 중... (필요: {unique_needed_items})")
+                    time.sleep(1.0)
                 else:
                     time.sleep(0.5)
 

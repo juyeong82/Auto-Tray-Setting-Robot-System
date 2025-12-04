@@ -15,6 +15,7 @@ import os
 import sys
 from scipy.spatial.transform import Rotation as R
 from std_msgs.msg import Int32  # 속도 제어 메시지 추가
+import threading
 
 import DR_init
 from ff_robot_interfaces.srv import DetectObject, PlaceItem
@@ -94,7 +95,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 20.0  # N
+FORCE_THRESHOLD = 25.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================

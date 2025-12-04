@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # safety_monitor_node.py
-# [GUI Ver] 웹캠 화면 + 위험 구역 시각화 + 로그 출력
+# [Final] 웹캠 감시 -> /robot_speed 토픽 발행 -> 로봇 감속
 
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Int32  # [추가] 토픽 메시지 타입
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -13,17 +14,16 @@ import os
 # =========================================================
 # 🎛️ CONFIGURATION
 # =========================================================
-WEBCAM_INDEX = 0        # 웹캠 번호
-CONF_THRESHOLD = 0.4    # 사람 인식 정확도 기준
-PIXEL_TOUCH_LIMIT = 10  # 10픽셀 이상 겹치면 감지
+WEBCAM_INDEX = 8
+CONF_THRESHOLD = 0.4    
+PIXEL_TOUCH_LIMIT = 10  
 
-# [위험 구역 설정] (화면 오른쪽 절반 예시)
-# 초록색/빨간색 네모로 표시될 영역입니다.
+# [위험 구역 설정]
 DANGER_ZONE_POINTS = np.array([
-    [320, 0],    # 상단 중앙
-    [640, 0],    # 상단 우측
-    [640, 480],  # 하단 우측
-    [320, 480]   # 하단 중앙
+    [0, 0],    # 상단 좌측
+    [320, 0],    # 상단 우측
+    [320, 480],  # 하단 우측
+    [0, 480]   # 하단 좌측
 ], np.int32)
 # =========================================================
 
@@ -32,8 +32,11 @@ class SafetyMonitorNode(Node):
         super().__init__('safety_monitor_node')
         
         self.get_logger().info("=========================================")
-        self.get_logger().info("👀 Safety Monitor: GUI 디버깅 모드")
+        self.get_logger().info("🛡️ Safety Monitor: Active Mode")
         self.get_logger().info("=========================================")
+
+        # [핵심] 속도 제어 퍼블리셔 생성
+        self.speed_pub = self.create_publisher(Int32, '/robot_speed', 10)
 
         # YOLO 모델 로드
         try:
@@ -58,6 +61,15 @@ class SafetyMonitorNode(Node):
 
         self.zone_mask = None
 
+    def publish_speed_command(self, speed):
+        """속도 명령 전송 함수"""
+        msg = Int32()
+        msg.data = speed
+        self.speed_pub.publish(msg)
+        # 로그 출력 (송신 확인용)
+        status = "SLOW (30%)" if speed == 30 else "NORMAL (100%)"
+        self.get_logger().info(f"📤 [Signal] 속도 명령 전송: {status}")
+
     def timer_callback(self):
         ret, frame = self.cap.read()
         if not ret: return
@@ -67,7 +79,7 @@ class SafetyMonitorNode(Node):
             self.zone_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             cv2.fillPoly(self.zone_mask, [DANGER_ZONE_POINTS], 255)
 
-        # 2. 사람 감지 (YOLO Segmentation)
+        # 2. 사람 감지
         results = self.model(frame, classes=0, verbose=False, conf=CONF_THRESHOLD)
         
         current_danger = False
@@ -80,50 +92,44 @@ class SafetyMonitorNode(Node):
                     mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
                     detected_mask_overlay = cv2.bitwise_or(detected_mask_overlay, mask)
 
-        # 3. 겹침 확인 (핵심 로직)
+        # 3. 겹침 확인
         overlap = cv2.bitwise_and(self.zone_mask, detected_mask_overlay)
         overlap_count = cv2.countNonZero(overlap)
 
         if overlap_count > PIXEL_TOUCH_LIMIT:
             current_danger = True
 
-        # 4. 로그 출력
+        # 4. 상태 변경 시 토픽 발행 및 로그 출력
         if current_danger:
             if not self.is_danger_state:
-                print("\n🚨🚨🚨 영역 내 사람이 들어옴! 🚨🚨🚨\n")
+                print("\n🚨🚨🚨 [DANGER] 작업자 접근! -> 감속 명령(10%) 전송 🚨🚨🚨\n")
+                self.publish_speed_command(30) # 30%로 감속
                 self.is_danger_state = True
         else:
             if self.is_danger_state:
-                print("✅ 사람이 나갔습니다. (안전)")
+                print("\n✅ [SAFE] 안전 구역 확보 -> 정상 속도(100%) 복귀\n")
+                self.publish_speed_command(100) # 100%로 복귀
                 self.is_danger_state = False
 
         # =========================================================
         # 📺 [화면 디버깅] 시각화 코드
         # =========================================================
-        
-        # (1) 상태에 따른 색상 설정 (위험: 빨강 / 안전: 초록)
         color = (0, 0, 255) if current_danger else (0, 255, 0)
         thickness = 3 if current_danger else 2
-        status_text = "DANGER !!!" if current_danger else "SAFE"
+        status_text = "DANGER (SLOW)" if current_danger else "SAFE (NORMAL)"
 
-        # (2) 위험 구역(Polygon) 그리기
         cv2.polylines(frame, [DANGER_ZONE_POINTS], True, color, thickness)
 
-        # (3) 감지된 사람 빨간색 반투명 표시
         if cv2.countNonZero(detected_mask_overlay) > 0:
             color_overlay = np.zeros_like(frame)
-            # 마스크 영역을 빨간색으로 칠함
             color_overlay[:, :, 2] = detected_mask_overlay 
-            # 원본과 합성 (투명도 조절)
             frame = cv2.addWeighted(frame, 1.0, color_overlay, 0.5, 0)
 
-        # (4) 텍스트 출력
         cv2.putText(frame, f"Status: {status_text}", (20, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
 
-        # (5) 윈도우 띄우기
         cv2.imshow("Safety Monitor WebCam", frame)
-        cv2.waitKey(1) # 화면 갱신 필수
+        cv2.waitKey(1)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -134,7 +140,7 @@ def main(args=None):
         pass
     finally:
         node.cap.release()
-        cv2.destroyAllWindows() # 창 닫기
+        cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
 
