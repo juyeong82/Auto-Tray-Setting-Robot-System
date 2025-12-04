@@ -48,7 +48,7 @@ SAFE_Z_FLOOR_LIMIT = 10.0
 
 
 EXTRA_LIFT_HEIGHT = 150.0
-DROP_SAFETY_MARGIN = 7.0
+DROP_SAFETY_MARGIN = 0.0  # 원래 7
 
 J_ITEM_OBSERVE = [-33.197, 21.512, 35.707, -0.118, 122.787, 144.296]
 
@@ -90,7 +90,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 15.0  # N
+FORCE_THRESHOLD = 20.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================

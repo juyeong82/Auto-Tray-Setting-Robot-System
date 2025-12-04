@@ -58,8 +58,8 @@ TRAY_CENTER_OFFSET_X = 80.0
 TRAY_0_EDGE_POS = [205.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 TRAY_1_EDGE_POS = [435.0, 20.0, 25.0, 43.35, -180.0, -134.82]
 
-TRAY_FLOOR_Z = -5.0  # ⬆️ 변경: 25.0 → -25.0
-SAFE_Z_FLOOR_LIMIT = 10.0
+TRAY_FLOOR_Z = -15.0  # ⬆️ 변경: 25.0 → -25.0
+# SAFE_Z_FLOOR_LIMIT = 0
 
 APPROACH_HEIGHT = 100.0
 EXTRA_LIFT_HEIGHT = 50.0
@@ -81,7 +81,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 15.0  # N
+FORCE_THRESHOLD = 20.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================
@@ -399,15 +399,15 @@ def serve_tray(slot_id):
     push_contact_pos[1] -= push_start_offset_y # Y축 마이너스 방향으로 이동 (뒤쪽)
     push_contact_pos[5] = SERVING_GRIP_RZ
     
-    # 3. 그리퍼 닫기 (그리퍼 밑판을 푸시 툴로 사용)
+    # 3. 그리퍼 열기 (그리퍼 밑판을 푸시 툴로 사용)
     if gripper:
         try:
-            node_.get_logger().info("   👐 그리퍼 닫기 (푸시 준비)")
+            node_.get_logger().info("   👐 그리퍼 열기 (푸시 준비)")
             # 트레이와 충돌하지 않도록 그리퍼를 최대한 열어둡니다.
             gripper.open_gripper_gripper() 
             time.sleep(0.5) 
         except Exception as e:
-            node_.get_logger().warn(f"⚠️ Gripper close failed: {e}")
+            node_.get_logger().warn(f"⚠️ Gripper open failed: {e}")
             
     # 4. 접근 위치 (상공)
     approach_push = list(push_contact_pos)
@@ -418,7 +418,7 @@ def serve_tray(slot_id):
     # TRAY_FLOOR_Z = -25.0 이고 트레이 높이가 15mm 정도라고 가정할 때,
     push_height = TRAY_FLOOR_Z 
     push_pose = list(push_contact_pos)
-    push_pose[2] = push_height
+    push_pose[2] = -15
     
     if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
 
