@@ -14,8 +14,8 @@ class GripperManager:
             "burger3": {"open": 800, "close": 600},
             
             # 사이드 (감자튀김, 너겟 등)
-            "fries":   {"open": 1200, "close": 850}, 
-            "nugget":  {"open": 1200, "close": 850},
+            "fries":   {"open": 1200, "close": 600}, 
+            "nugget":  {"open": 1200, "close": 600},
             
             # 음료 (캔 지름 약 66mm -> 62~63mm로 설정하여 적당히 텐션 유지)
             "coke":    {"open": 850, "close": 640}, 

@@ -81,10 +81,16 @@ FIXED_PICK_Z = {}
 #     "coke": 92.0, "cider": 92.0, "burger1": 50.0, "burger2": 50.0, "burger3": 50.0, 
 # }
 
-SCALE_X_TARGETS = ['cider', 'coke', 'fries', 'nugget']
+ITEM_FINE_TUNE = {
+    "fries":   {"x": -5.0, "y": 0.0},  # 테스트하며 값 수정 (예: x를 5.0으로)
+    "nugget":  {"x": -5.0, "y": 0.0},
+    # 필요하면 다른 메뉴도 추가 가능
+}
+
+SCALE_X_TARGETS = ['cider', 'coke']
 SCALE_Y_TARGETS = ['burger1', 'burger2', 'burger3']
 
-SCALE_FACTOR_X = 1.05
+SCALE_FACTOR_X = 1.06
 SCALE_FACTOR_Y = 1.05
 TILT_FACTOR_X = 0.10
 
@@ -95,7 +101,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 25.0  # N
+FORCE_THRESHOLD = 30.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================
@@ -155,7 +161,7 @@ def get_robot_pose_matrix(posx_list):
 def transform_camera_to_base(cam_xyz):
     from DSR_ROBOT2 import get_current_posx
     try:
-        curr_posx = get_current_posx()
+        curr_posx,_ = get_current_posx()
         if curr_posx is None: return None
         if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
         T_base_gripper = get_robot_pose_matrix(curr_posx)
@@ -247,6 +253,20 @@ def safe_move_and_pick_item(base_pos, item_name, ref_x_pos, ref_y_pos, rot_rz):
         target_x = raw_x + GLOBAL_OFFSET_X
         target_y = raw_y + GLOBAL_OFFSET_Y
         target_z = raw_z + GLOBAL_OFFSET_Z + offset_info["z"]
+
+    # =========================================================================
+    # [추가됨] 아이템별 미세 위치 보정 (Fine Tuning)
+    # =========================================================================
+    if item_name in ITEM_FINE_TUNE:
+        tune_data = ITEM_FINE_TUNE[item_name]
+        dx = tune_data.get("x", 0.0)
+        dy = tune_data.get("y", 0.0)
+        
+        target_x += dx
+        target_y += dy
+        
+        node_.get_logger().info(f"   🔧 [{item_name}] 미세 보정 적용: X{dx:+.1f}, Y{dy:+.1f}")
+    # =========================================================================
 
     if item_name in FIXED_PICK_Z:
         target_z = FIXED_PICK_Z[item_name]

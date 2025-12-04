@@ -90,7 +90,7 @@ DR_init.__dsr__model = ROBOT_MODEL
 
 # ========== 추가 ==========
 # [Force Monitor Config]
-FORCE_THRESHOLD = 25.0  # N
+FORCE_THRESHOLD = 20.0  # N
 MOVING_AVG_WINDOW = 5
 COOLDOWN_TIME = 1.0  # seconds
 # ==========================
@@ -146,9 +146,20 @@ def transform_camera_to_base(cam_xyz):
         else:
             return None
             
-        curr_posx = get_current_posx()
+        curr_posx, _ = get_current_posx()
         if curr_posx is None: return None
-        if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
+        
+        # if isinstance(curr_posx, tuple): curr_posx = curr_posx[0]
+
+        # [수정] 튜플/리스트 체크 및 길이 확인 (IndexError 방지)
+        if isinstance(curr_posx, tuple):
+            if len(curr_posx) > 0: curr_posx = curr_posx[0]
+            else: return None
+            
+        # 데이터가 비어있으면 리턴
+        if not curr_posx: return None
+
+
         T_base_gripper = get_robot_pose_matrix(curr_posx)
         T_base_cam = T_base_gripper @ T_GRIPPER_TO_CAM
         p_cam = np.array([cam_xyz[0]*1000, cam_xyz[1]*1000, cam_xyz[2]*1000, 1.0])
@@ -430,36 +441,40 @@ def serve_tray(slot_id):
     node_.get_logger().info(f"   ⬇️ 서빙 높이 하강 (Movel): Z={TRAY_FLOOR_Z}")
     if not safe_movel(push_pose, "서빙 (뒤) 접촉 하강"): return False
     # =========================================================================
-    # [수정됨] 6. 푸시 실행 (현재 Joint 위치 기준 Y축 이동)
-    # =========================================================================
+    # 6. 푸시 실행
     from DSR_ROBOT2 import get_current_posx
+    curr_pos,_ = get_current_posx()
     
-    # 방금 Joint로 이동한 '실제 로봇 위치'를 가져옵니다.
-    curr_pos = get_current_posx()
-    if curr_pos is None: return False
+    # [수정] 데이터 검증 강화
+    if curr_pos is None: 
+        node_.get_logger().error("   ❌ 현재 위치 읽기 실패 (None)")
+        return False
+        
+    # 튜플/리스트 처리 및 길이 확인
+    start_push_pose = None
+    if isinstance(curr_pos, tuple):
+        if len(curr_pos) > 0: start_push_pose = list(curr_pos[0])
+    else:
+        start_push_pose = list(curr_pos)
+        
+    if not start_push_pose:
+        node_.get_logger().error("   ❌ 현재 위치 데이터 비정상 (Empty)")
+        return False
     
-    # API 버전에 따라 튜플((pos, sol))로 올 수 있으므로 처리
-    start_push_pose = list(curr_pos[0]) if isinstance(curr_pos, tuple) else list(curr_pos)
-    
-    # 목표 위치 계산 (현재 위치에서 Y축만 증가시킴)
+    # 목표 위치 계산
     final_push_pose = list(start_push_pose)
     final_push_pose[1] += SERVING_PUSH_DISTANCE 
-    
     node_.get_logger().info(f"   🚀 서빙 밀기 시작 (+Y {SERVING_PUSH_DISTANCE}mm)")
-    
-    # Z축은 Joint 이동으로 맞춰진 높이가 그대로 유지됨 (Linear Move)
     if not safe_movel(final_push_pose, "트레이 밀기 동작"): return False
 
-    # 7. 안전하게 상승하여 복귀
+    # 7. 복귀
     depart_pose = list(final_push_pose)
     depart_pose[2] += APPROACH_HEIGHT
     
     if not safe_movel(depart_pose, "서빙 완료 후 상승"): return False
     
     node_.get_logger().info(f"   ✅ 서빙 완료!")
-    
     return True
-
 
 # ⭐ [NEW] 트레이 보충 함수
 def ensure_tray_in_slot(slot_id):
