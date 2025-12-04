@@ -14,6 +14,7 @@ import numpy as np
 import os
 import sys
 from scipy.spatial.transform import Rotation as R
+from std_msgs.msg import Int32  # 속도 제어 메시지 추가
 
 import DR_init
 from ff_robot_interfaces.srv import DetectObject, PlaceItem
@@ -30,6 +31,9 @@ sys.stdout.reconfigure(line_buffering=True)
 # ==============================================================================
 # 🎛️ CONFIGURATION
 # ==============================================================================
+
+# [속도 제어용 전역 변수]
+g_current_speed = 100
 
 # [Robot Base Offset] 로봇 베이스와 작업대 간의 미세 보정값 -> safe_move_and_pick_item() 내 좌표 계산 시 더해짐
 GLOBAL_OFFSET_X = 0.0
@@ -472,7 +476,34 @@ def handle_place_item(request, response):
     
     return response
     
-    
+# ------------------------------------------------------------------------------
+# [Speed Control] 속도 제어 로직 (스레드 처리)
+# ------------------------------------------------------------------------------
+def process_speed_change_task(target_speed):
+    global g_current_speed
+    from DSR_ROBOT2 import change_operation_speed
+
+    if target_speed > g_current_speed + 30:
+        node_.get_logger().warn(f"📈 가속 Ramping: {g_current_speed} -> {target_speed}")
+        temp_speed = g_current_speed
+        while temp_speed < target_speed:
+            temp_speed += 20
+            if temp_speed > target_speed: temp_speed = target_speed
+            change_operation_speed(temp_speed)
+            time.sleep(0.2)
+    else:
+        change_operation_speed(target_speed)
+
+    g_current_speed = target_speed
+    node_.get_logger().warn(f"⚡ [속도 변경 완료] {target_speed}%")
+
+def speed_callback(msg):
+    target_speed = msg.data
+    if 0 < target_speed <= 100:
+        t = threading.Thread(target=process_speed_change_task, args=(target_speed,), daemon=True)
+        t.start()
+    else:
+        node_.get_logger().warn(f"⚠️ 잘못된 속도 값: {target_speed}")    
 
 def main(args=None):
     global node_, dsr_control_node_, vision_cli, gripper, gripper_manager, slot_manager
@@ -514,6 +545,15 @@ def main(args=None):
         f'/{ROBOT_ID}/msg/tool_force',
         force_callback,
         10,
+        callback_group=cb_group
+    )
+
+    # [추가] 속도 제어 토픽 구독
+    node_.create_subscription(
+        Int32, 
+        '/robot_speed', 
+        speed_callback, 
+        10, 
         callback_group=cb_group
     )
     
