@@ -1,6 +1,0 @@
-Invoking command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/rokey/ros2_ws/src/DoosanBootcamp3rd/dsr_moveit2/dsr_moveit_config_m0617 -DCMAKE_INSTALL_PREFIX=/home/rokey/ros2_ws/install/dsr_moveit_config_m0617
-Invoked command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/rokey/ros2_ws/src/DoosanBootcamp3rd/dsr_moveit2/dsr_moveit_config_m0617 -DCMAKE_INSTALL_PREFIX=/home/rokey/ros2_ws/install/dsr_moveit_config_m0617
-Invoking command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/rokey/ros2_ws/build/dsr_moveit_config_m0617 -- -j16 -l16
-Invoked command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/rokey/ros2_ws/build/dsr_moveit_config_m0617 -- -j16 -l16
-Invoking command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/rokey/ros2_ws/build/dsr_moveit_config_m0617
-Invoked command in '/home/rokey/ros2_ws/build/dsr_moveit_config_m0617' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/rokey/ros2_ws/build/dsr_moveit_config_m0617

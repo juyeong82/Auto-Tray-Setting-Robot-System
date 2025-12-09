@@ -1,9 +1,0 @@
-# Request (주문 요청)
-# JSON 문자열로 주문 정보를 받음 (예: "{\"burger\": 1, \"fries\": 2}")
-string order_data_json
-string order_id
-string table_id
----
-# Response (주문 결과)
-bool success
-string message
