@@ -16,4 +16,8 @@ log/
 
 # cache 삭제
 __pycache__/
+<<<<<<< HEAD
 *.pyc
+=======
+.pyc
+>>>>>>> main

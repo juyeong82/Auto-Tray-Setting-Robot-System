@@ -1,0 +1,29 @@
+# DetectObject.srv
+# YOLO 비전 노드가 물체를 인식하고 좌표를 반환하는 서비스
+
+# Request
+string target_object_id    # 찾을 물체 이름 (예: "tray", "burger1", "coke")
+
+---
+
+# Response
+bool found                 # 물체 발견 여부
+
+# 위치 (카메라 좌표계 기준, 단위: m)
+geometry_msgs/Point position
+
+# 회전 (Euler 각도, 단위: degree)
+# - rx: X축 회전 (Roll)
+# - ry: Y축 회전 (Pitch)  
+# - rz: Z축 회전 (Yaw) ← OBB 회전값이 여기 들어감!
+float64 rx
+float64 ry
+float64 rz
+
+# 추가 정보
+float64 width              # 물체 너비 (OBB 기준, 픽셀)
+float64 height             # 물체 높이 (OBB 기준, 픽셀)
+float64 confidence         # 인식 신뢰도 (0.0 ~ 1.0)
+
+# 디버깅용 메시지 (예: "가려져서 안 보임", "성공")
+string message  
