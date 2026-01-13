@@ -12,8 +12,7 @@
 
 > *로봇이 키오스크 주문을 인식하고, 햄버거와 음료를 트레이에 세팅하는 시연 영상입니다.*
 
-[![Demo Video](https://youtu.be/7-8vbY-XjlU)](https://youtu.be/7-8vbY-XjlU)
-
+[![Demo Video](http://img.youtube.com/vi/7-8vbY-XjlU/0.jpg)](https://youtu.be/7-8vbY-XjlU)
 ---
 
 ## 1. 프로젝트 개요 (Project Overview)
