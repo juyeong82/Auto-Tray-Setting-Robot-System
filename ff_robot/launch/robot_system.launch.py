@@ -9,7 +9,7 @@ def generate_launch_description():
         # 1. YOLO Vision Node
         Node(
             package=package_name,
-            executable='yolo_vision_node',  # setup.py의 왼쪽 이름과 일치해야 함!
+            executable='yolo_vision_node',
             name='yolo_vision_node',
             output='screen'
         ),
@@ -17,7 +17,7 @@ def generate_launch_description():
         # 2. Item Placement Controller (Module 1)
         Node(
             package=package_name,
-            executable='module1_item',      # setup.py의 'module1_item' 사용
+            executable='module1_item_jy', 
             name='item_placement_controller',
             output='screen'
         ),
@@ -25,8 +25,24 @@ def generate_launch_description():
         # 3. Order Manager (Module 2)
         Node(
             package=package_name,
-            executable='module2_manager_555', # setup.py의 'module2_manager_555' 사용
-            name='order_orchestrator',
+            executable='module2_manager_jy',
+            name='order_manager',
+            output='screen'
+        ),
+        
+        # 4. YOLO Safety monitor
+        Node(
+            package=package_name,
+            executable='safety_monitor',
+            name='safety_monitor',
+            output='screen'
+        ),
+        
+        # 5. kiosk ui
+        Node(
+            package=package_name,
+            executable='kiosk_final',
+            name='kiosk_final',
             output='screen'
         ),
     ])
