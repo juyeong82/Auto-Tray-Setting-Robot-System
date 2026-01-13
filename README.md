@@ -38,22 +38,23 @@ graph LR
     User((User)) -->|Order| Kiosk[Kiosk UI]
     Kiosk -->|Pub: Order List| TaskMgr[Task Manager Node]
     
-    subgraph Vision System
+    subgraph Vision_System [Vision System]
         Cam[RealSense D435] -->|RGB-D Data| YOLO[YOLOv11 OBB]
         YOLO -->|Class, Box, Angle| Coord[Coord Converter]
         Coord -->|TF: Pixel -> RobotBase| TargetPos[Target Pose]
     end
     
-    TaskMgr -->|Trigger| Vision System
+    %% 수정됨: TaskMgr가 Vision System 그룹이 아닌 YOLO 노드로 직접 연결
+    TaskMgr -->|Trigger| YOLO
     TargetPos -->|Return Pose| TaskMgr
     
-    subgraph Robot Control
+    subgraph Robot_Control [Robot Control]
         TaskMgr -->|Action Goal| MoveIt[MoveIt2 Planner]
         MoveIt -->|Trajectory| Controller[M0609 Controller]
         Controller -->|Execute| Gripper[OnRobot RG2]
     end
     
-    subgraph Safety System
+    subgraph Safety_System [Safety System]
         Sensor[Robot State / Force] -->|Monitor| SafetyNode[Safety Monitor]
         SafetyNode -- "Emergency Stop" --> Controller
     end
